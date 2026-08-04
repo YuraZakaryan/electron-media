@@ -1,6 +1,6 @@
 {
   "name": "@electron-media/react",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "React binding for @electron-media/core — a single useMediaPlayer hook exposing audio/subtitle track selection and playback state.",
   "type": "module",
   "license": "MIT",
@@ -17,7 +17,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run"
