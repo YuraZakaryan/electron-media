@@ -136,6 +136,42 @@ describe("TextTrackCueRenderer", () => {
     expect(textTrack.mode).toBe("disabled");
   });
 
+  it("creates a track on a replacement <video> instead of reusing the previous element's", () => {
+    // The regression this guards: a TextTrack belongs to the element it was
+    // created on and cannot be moved. Caching it without checking the owner
+    // meant a host that remounts its <video> — closing and reopening a player —
+    // kept writing every later cue into the detached element's track. Nothing
+    // appeared on screen, no error was raised, and the element actually being
+    // played carried no text track at all.
+    const first = setup();
+    const renderer = new TextTrackCueRenderer();
+    renderer.render(first.video, [cue(1, 2, "before remount")]);
+    expect(first.textTrack.attachedTexts).toEqual(["before remount"]);
+
+    const second = setup();
+    renderer.render(second.video, [cue(3, 4, "after remount")]);
+
+    expect(second.textTrack.attachedTexts).toEqual(["after remount"]);
+    expect(second.textTrack.mode).toBe("showing");
+    // The old element keeps whatever it had — it is being discarded, and a
+    // track added via addTextTrack cannot be removed anyway.
+    expect(first.textTrack.attachedTexts).toEqual(["before remount"]);
+  });
+
+  it("reports intact right after switching to a replacement <video>", () => {
+    // The new track starts empty; carrying the previous element's cue count
+    // over would make the repair loop see a wipe that never happened and
+    // re-render on every tick.
+    const first = setup();
+    const renderer = new TextTrackCueRenderer();
+    renderer.render(first.video, [cue(1, 2, "before remount")]);
+
+    const second = setup();
+    renderer.render(second.video, []);
+
+    expect(renderer.isIntact()).toBe(true);
+  });
+
   it("clear() before anything was rendered does not throw", () => {
     const renderer = new TextTrackCueRenderer();
 

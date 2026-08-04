@@ -40,6 +40,8 @@ export class TextTrackCueRenderer implements ISubtitleRenderer {
   private readonly cueLine?: number | (() => number);
   private readonly defaultLabel: string;
   private textTrack: TextTrack | null = null;
+  /** The element {@link textTrack} was created on — a track cannot be moved between elements. */
+  private trackOwner: HTMLVideoElement | null = null;
   private lastCueCount = 0;
 
   constructor(options: TextTrackCueRendererOptions = {}) {
@@ -115,9 +117,23 @@ export class TextTrackCueRenderer implements ISubtitleRenderer {
     return this.textTrack.mode === "showing" && this.textTrack.cues !== null && this.textTrack.cues.length > 0;
   }
 
+  /**
+   * A `TextTrack` belongs to the element it was created on and cannot be moved
+   * to another, so the cached one is only reusable while the same element is
+   * still being rendered to. Caching it without that check meant a host that
+   * remounts its `<video>` (closing and reopening a player, swapping sources)
+   * kept writing every later cue into the *detached* element's track: nothing
+   * on screen, no error, and no track at all on the element actually being
+   * played. Comparing the owner creates a fresh track on the new element
+   * instead.
+   */
   private ensureTextTrack(video: HTMLVideoElement): TextTrack {
-    if (this.textTrack) return this.textTrack;
+    if (this.textTrack && this.trackOwner === video) return this.textTrack;
     this.textTrack = video.addTextTrack("subtitles", this.defaultLabel);
+    this.trackOwner = video;
+    // The fresh track starts empty, so a count carried over from the previous
+    // element would make isIntact() report a wipe that never happened.
+    this.lastCueCount = 0;
     return this.textTrack;
   }
 }
