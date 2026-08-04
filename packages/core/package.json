@@ -1,6 +1,6 @@
 {
   "name": "@electron-media/core",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Framework-agnostic HLS playback, multi-audio track selection, and subtitle engine for Electron media apps.",
   "type": "module",
   "license": "MIT",
