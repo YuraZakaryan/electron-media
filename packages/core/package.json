@@ -5,6 +5,14 @@
   "type": "module",
   "license": "MIT",
   "homepage": "https://www.npmjs.com/package/@electron-media/core",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YuraZakaryan/electron-media.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/YuraZakaryan/electron-media/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
