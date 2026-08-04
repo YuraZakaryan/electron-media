@@ -35,7 +35,18 @@ Covers real playback, audio-track switching, subtitle rendering/delay/toggling, 
 
 ## Docs
 
-See [`docs/`](docs): `architecture.md`, `public-api.md`, `lifecycle.md`, `extension-points.md`, `naming-conventions.md`, `design-principles.md`.
+See [`docs/`](docs): `architecture.md`, `public-api.md`, `lifecycle.md`, `extension-points.md`, `naming-conventions.md`, `design-principles.md`, [`releasing.md`](docs/releasing.md).
+
+## Releasing
+
+Publishing goes through [Changesets](https://github.com/changesets/changesets) — see [`docs/releasing.md`](docs/releasing.md) for the full flow. Short version:
+
+```bash
+pnpm changeset   # after changing packages/core or packages/react — record what changed
+pnpm release     # on main — builds, versions, and publishes via `pnpm publish`
+```
+
+Never call `pnpm publish` / `npm publish` directly — only `changeset publish` correctly rewrites the `workspace:*` dependency between `react` and `core` into a real version.
 
 ## License
 
