@@ -1,5 +1,12 @@
 # @electron-media/react
 
+## 0.1.9
+
+### Patch Changes
+
+- Updated dependencies [b4958dd]
+  - @electron-media/core@0.2.4
+
 ## 0.1.8
 
 ### Patch Changes
