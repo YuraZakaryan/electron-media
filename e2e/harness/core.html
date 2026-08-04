@@ -1,0 +1,201 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>core harness</title>
+  <!-- hls.js is a peerDependency; dist/index.js imports the bare specifier
+       "hls.js", which only a bundler or an import map can resolve for a
+       plain <script type="module"> page. -->
+  <script type="importmap">
+    { "imports": { "hls.js": "/vendor/hls.mjs" } }
+  </script>
+</head>
+<body>
+  <video id="video" muted playsinline width="320" height="180"></video>
+  <div>ready: <span id="ready-state">false</span></div>
+  <div>error: <span id="error-message"></span></div>
+  <div>selected audio track id: <span id="selected-audio-track-id"></span></div>
+  <ul id="audio-track-list"></ul>
+  <div>selected subtitle track id: <span id="selected-subtitle-track-id"></span></div>
+  <div id="subtitle-cue-text"></div>
+
+  <script type="module">
+    import {
+      MediaPlayer,
+      HlsJsAdapter,
+      HlsNativeSubtitleSource,
+      asSubtitleSourceId,
+      asSubtitleTrackId,
+      TrackKind,
+    } from "/core/index.js";
+
+    const video = document.getElementById("video");
+    const readyState = document.getElementById("ready-state");
+    const errorMessage = document.getElementById("error-message");
+    const selectedAudioTrackId = document.getElementById("selected-audio-track-id");
+    const audioTrackList = document.getElementById("audio-track-list");
+    const selectedSubtitleTrackId = document.getElementById("selected-subtitle-track-id");
+    const subtitleCueText = document.getElementById("subtitle-cue-text");
+
+    // Backs PlayerPreferenceStore with localStorage so a real page.reload()
+    // in a test (a fresh JS context, exactly like relaunching an app) can
+    // prove AudioTrackController's auto-restore-from-storage path, not just
+    // its in-memory default-track fallback.
+    class LocalStoragePreferenceStore {
+      getAudioLanguage() {
+        return localStorage.getItem("e2e-audio-language");
+      }
+      setAudioLanguage(language) {
+        localStorage.setItem("e2e-audio-language", language);
+      }
+    }
+
+    // setDelaySeconds() only ever affects cues that pass through
+    // SubtitleController's own canonicalCues -> CueProjector -> renderer
+    // pipeline. HlsNativeSubtitleSource never emits onCuesChanged (hls.js
+    // paints its own subtitles directly onto a hidden TextTrack instead), so
+    // delay is a permanent no-op for the fixture's embedded WebVTT track —
+    // this static source exists purely to exercise the delay contract for
+    // real, the way a VodExtractedSubtitleSource/OpenSubtitlesSource would.
+    const STATIC_SUBTITLE_SOURCE_ID = asSubtitleSourceId("static-test");
+    const STATIC_SUBTITLE_TRACK_ID = asSubtitleTrackId(9999);
+    const STATIC_CUE = { startSeconds: 2, endSeconds: 3, text: "Delay test cue" };
+    class StaticSubtitleSource {
+      sourceId = STATIC_SUBTITLE_SOURCE_ID;
+      #cueListeners = new Set();
+      getTracks() {
+        return [
+          {
+            trackId: STATIC_SUBTITLE_TRACK_ID,
+            displayName: "Static",
+            language: "en",
+            kind: TrackKind.Default,
+            sourceId: STATIC_SUBTITLE_SOURCE_ID,
+          },
+        ];
+      }
+      selectTrack(trackId) {
+        if (trackId === STATIC_SUBTITLE_TRACK_ID) {
+          this.#cueListeners.forEach((callback) => callback([STATIC_CUE]));
+        }
+      }
+      onTracksChanged() {
+        return () => {};
+      }
+      onCuesChanged(trackId, callback) {
+        if (trackId !== STATIC_SUBTITLE_TRACK_ID) return () => {};
+        this.#cueListeners.add(callback);
+        return () => this.#cueListeners.delete(callback);
+      }
+      dispose() {}
+    }
+
+    function renderAudioTracks(player) {
+      const tracks = player.audio.getTracks();
+      const selectedId = player.audio.selectedTrackId;
+      selectedAudioTrackId.textContent = selectedId === null ? "" : String(selectedId);
+      audioTrackList.innerHTML = "";
+      for (const track of tracks) {
+        const li = document.createElement("li");
+        const button = document.createElement("button");
+        button.dataset.trackId = String(track.trackId);
+        button.dataset.language = track.language ?? "";
+        button.textContent = `${track.language ?? track.displayName} (${track.trackId})`;
+        if (track.trackId === selectedId) button.classList.add("selected");
+        button.addEventListener("click", () => player.audio.select(track.trackId));
+        li.appendChild(button);
+        audioTrackList.appendChild(li);
+      }
+    }
+
+    // Rebuilds the adapter/player from scratch with the given HlsJsAdapter
+    // options — needed for tests exercising shouldRetry/maxRetries, which
+    // can only be configured at HlsJsAdapter construction time, not changed
+    // on a live instance.
+    function createPlayer(adapterOptions = {}) {
+      window.__player?.destroy();
+
+      // manifestLoadError (e.g. a 404) leaves hls.js with zero levels; the
+      // adapter's default recovery (startLoad()) only resumes level loading,
+      // so it no-ops on a manifest that never loaded at all — the adapter's
+      // own docs call this out and expose reloadOnDetail as the documented
+      // fix (a real hls.loadSource() reload instead), which is what lets a
+      // permanently-unloadable URL actually exhaust maxRetries and surface a
+      // fatal error instead of hanging forever.
+      const adapter = new HlsJsAdapter({
+        reloadOnDetail: ["manifestLoadError", "manifestParsingError"],
+        ...adapterOptions,
+      });
+      const subtitleSources = [
+        new HlsNativeSubtitleSource({ sourceId: asSubtitleSourceId("hls-native"), adapter }),
+        new StaticSubtitleSource(),
+      ];
+
+      const player = new MediaPlayer({
+        video,
+        hlsAdapter: adapter,
+        subtitleSources,
+        preferenceStore: new LocalStoragePreferenceStore(),
+      });
+
+      readyState.textContent = "false";
+      errorMessage.textContent = "";
+
+      // errorObserved fires for every hls.js error (fatal or not) before any
+      // retry policy runs — the only place a transient, successfully-retried
+      // failure is ever visible, since a recovered error never reaches
+      // MediaPlayer's own "error" event.
+      window.__adapterErrors = [];
+      adapter.on("errorObserved", (event) => window.__adapterErrors.push(event));
+
+      player.audio.onTracksChanged(() => renderAudioTracks(player));
+      player.audio.onSelectionChanged(() => renderAudioTracks(player));
+
+      player.subtitles.onSelectionChanged((track) => {
+        selectedSubtitleTrackId.textContent = track ? String(track.trackId) : "";
+      });
+
+      player.events.on("ready", () => {
+        readyState.textContent = "true";
+      });
+      player.events.on("error", (event) => {
+        errorMessage.textContent = `${event.code}|fatal:${event.fatal}`;
+      });
+
+      window.__player = player;
+      window.__loadSource = (url) => player.loadSource(url);
+      window.__selectSubtitleTrack = (trackId) => player.subtitles.selectTrack(trackId);
+      window.__getSubtitleTracks = () => player.subtitles.getTracks();
+      window.__setSubtitleDelay = (offsetSeconds) => player.subtitles.setDelaySeconds(offsetSeconds);
+      // Exposed to prove destroy() is idempotent (a real consumer's cleanup
+      // effect can plausibly run twice, e.g. React StrictMode double-invoke)
+      // and doesn't throw the second time.
+      window.__destroy = () => player.destroy();
+
+      renderAudioTracks(player);
+    }
+
+    // Exposed so a test can reconfigure shouldRetry/maxRetries/retryDelayMs
+    // — options only settable at construction — without reloading the page.
+    window.__recreatePlayer = (adapterOptions) => createPlayer(adapterOptions);
+
+    // hls.js renders HlsNativeSubtitleSource cues directly onto its own
+    // hidden TextTrack (see HlsNativeSubtitleSource's class docs — it never
+    // emits onCuesChanged), so the only reliable way to observe the
+    // rendered cue text is to poll every native TextTrack's activeCues,
+    // not go through the library's own SubtitleController state.
+    setInterval(() => {
+      let activeCueText = "";
+      for (const track of video.textTracks) {
+        if (!track.activeCues || track.activeCues.length === 0) continue;
+        for (const cue of track.activeCues) {
+          if (cue.text) activeCueText = cue.text;
+        }
+      }
+      subtitleCueText.textContent = activeCueText;
+    }, 100);
+
+    createPlayer();
+  </script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>react harness</title>
+</head>
+<body>
+  <div id="root"></div>
+  <!-- Kept outside the React tree on purpose: after an unmount test calls
+       root.unmount(), these controls must still be clickable/inspectable
+       even though nothing React-owned remains in #root. -->
+  <input id="new-src-input" />
+  <button id="load-new-src-button" onclick="window.__setSourceUrl(document.getElementById('new-src-input').value)">load new src</button>
+  <button id="unmount-button" onclick="window.__unmount()">unmount</button>
+  <div>mounted: <span id="mounted-state">true</span></div>
+  <!-- Bundled by e2e/build-react-harness.mjs (esbuild --bundle), which
+       resolves react/react-dom/@electron-media/core/@electron-media/react
+       all at build time — no import map needed here, unlike core.html. -->
+  <script type="module" src="/react-app.bundle.js"></script>
+</body>
+</html>
