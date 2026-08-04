@@ -117,6 +117,17 @@ export class VodExtractedSubtitleSource implements ISubtitleSource {
     const track = this.tracksById.get(trackId);
     if (!track) return;
 
+    // Re-emit what is already cached, synchronously, before re-fetching.
+    // fetchAndMergeCues only notifies when it finds cues it has not seen
+    // before, so re-selecting a track whose .vtt was already fully read
+    // would otherwise never reach the renderer again — the track would show
+    // as selected while the screen kept whatever the previous selection put
+    // there. Mirrors OpenSubtitlesSource, which re-emits its cached
+    // transcript on every selectTrack.
+    if ((this.canonicalCuesByTrackId.get(trackId)?.length ?? 0) > 0) {
+      this.notifyCuesChanged(trackId);
+    }
+
     this.fetchAndMergeCues(trackId, track.vttUrl);
     this.pollTimer = setInterval(() => {
       this.fetchAndMergeCues(trackId, track.vttUrl);

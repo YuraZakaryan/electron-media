@@ -50,6 +50,15 @@ export class TextTrackCueRenderer implements ISubtitleRenderer {
   render(video: HTMLVideoElement, cues: readonly CanonicalCue[]): void {
     const textTrack = this.ensureTextTrack(video);
 
+    // `TextTrack.cues` is null while the track's mode is "disabled" — and a
+    // host-owned engine can disable a track it does not own at any time
+    // (hls.js does exactly this to every other text track when its own
+    // `subtitleTrack` is set). Reading `cues` in that state yields nothing to
+    // remove, so the stale cues survive and the mode flip below puts them
+    // straight back on screen. Re-enabling first is what makes the removal
+    // loop able to see them at all.
+    if (textTrack.mode === "disabled") textTrack.mode = "hidden";
+
     const existing = textTrack.cues ? Array.from(textTrack.cues) : [];
     existing.forEach((cue) => textTrack.removeCue(cue));
 
@@ -81,6 +90,10 @@ export class TextTrackCueRenderer implements ISubtitleRenderer {
   clear(): void {
     this.lastCueCount = 0;
     if (!this.textTrack) return;
+    // Same null-`cues`-while-disabled trap as in render(): clearing an
+    // already-disabled track has to re-enable it first, or its cues stay
+    // attached and resurface the next time anything shows the track.
+    if (this.textTrack.mode === "disabled") this.textTrack.mode = "hidden";
     const existing = this.textTrack.cues
       ? Array.from(this.textTrack.cues)
       : [];

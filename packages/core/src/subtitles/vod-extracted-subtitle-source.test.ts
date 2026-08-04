@@ -225,6 +225,68 @@ describe("VodExtractedSubtitleSource", () => {
     expect(fetchImpl.mock.calls.length).toBe(callsBeforeDeselect);
   });
 
+  it("re-emits already-cached cues synchronously when the same track is re-selected", async () => {
+    // The regression this guards: fetchAndMergeCues only notifies when it
+    // finds cues it has not seen before, so re-selecting a track whose .vtt
+    // was already fully read emitted nothing at all — the track showed as
+    // selected while the screen kept whatever the previous selection had
+    // rendered. Real path: user picks native, switches to OpenSubtitles,
+    // then switches back to native.
+    vi.useFakeTimers();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        fakeResponse({ text: vttWithCues(["00:01.000", "00:02.000", "Hello"]) })
+      );
+    const source = new VodExtractedSubtitleSource({
+      sourceId: SOURCE_ID,
+      tracks: [
+        { trackId: TRACK_ID, displayName: "English", kind: TrackKind.Default, vttUrl: "/vod/en.vtt" },
+      ],
+      fetchImpl,
+      pollIntervalMs: 1000,
+    });
+    source.selectTrack(TRACK_ID);
+    await vi.advanceTimersByTimeAsync(0);
+    source.selectTrack(null);
+
+    const listener = vi.fn();
+    source.onCuesChanged(TRACK_ID, listener);
+    source.selectTrack(TRACK_ID);
+
+    // Synchronously, before any re-fetch resolves — the renderer must not
+    // have to wait on the network to show a track it already has cues for.
+    expect(listener).toHaveBeenCalledWith([
+      { startSeconds: 1, endSeconds: 2, text: "Hello" },
+    ]);
+  });
+
+  it("does not emit on re-selection of a track that has no cached cues yet", async () => {
+    // The guard above must stay scoped to a genuine cache hit: a track whose
+    // .vtt has never yielded a cue has nothing to re-emit, and emitting an
+    // empty list here would clear a still-loading track's screen on every
+    // re-select instead of leaving the fetch to fill it.
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn().mockResolvedValue(fakeResponse({ text: "WEBVTT\n" }));
+    const source = new VodExtractedSubtitleSource({
+      sourceId: SOURCE_ID,
+      tracks: [
+        { trackId: TRACK_ID, displayName: "English", kind: TrackKind.Default, vttUrl: "/vod/en.vtt" },
+      ],
+      fetchImpl,
+      pollIntervalMs: 1000,
+    });
+    source.selectTrack(TRACK_ID);
+    await vi.advanceTimersByTimeAsync(0);
+    source.selectTrack(null);
+
+    const listener = vi.fn();
+    source.onCuesChanged(TRACK_ID, listener);
+    source.selectTrack(TRACK_ID);
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("a fetch that rejects outright is treated the same as a failed response — no crash, no emission", async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error("network down"));
     const source = new VodExtractedSubtitleSource({

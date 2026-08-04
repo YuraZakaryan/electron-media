@@ -182,6 +182,81 @@ describe("SubtitleController", () => {
     expect(renderer.render).toHaveBeenCalledWith(fakeVideo, cues);
   });
 
+  it("clears the previous source's cues when switching to a source that emits nothing synchronously", () => {
+    // The regression this guards: switching from a cache-hit source
+    // (OpenSubtitles-like, emits from inside selectTrack) to one that emits
+    // later or never — a still-fetching VodExtractedSubtitleSource, or
+    // HlsNativeSubtitleSource which never emits at all — used to leave the
+    // FIRST source's cues rendered indefinitely. The new track read as
+    // selected in the UI while the old subtitles kept showing on screen.
+    const cues: CanonicalCue[] = [
+      { startSeconds: 1, endSeconds: 2, text: "external" },
+    ];
+    const emitting = new SyncEmittingSubtitleSource(
+      asSubtitleSourceId("external"),
+      [track(1, "external")],
+      cues
+    );
+    const silent = new MockSubtitleSource(asSubtitleSourceId("native"), [
+      track(2, "native"),
+    ]);
+    const { controller, renderer } = setup([
+      emitting as unknown as MockSubtitleSource,
+      silent,
+    ]);
+    const fakeVideo = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as HTMLVideoElement;
+    controller.attach(fakeVideo);
+
+    controller.selectTrack(asSubtitleTrackId(1));
+    expect(renderer.render).toHaveBeenLastCalledWith(fakeVideo, cues);
+
+    controller.selectTrack(asSubtitleTrackId(2));
+
+    expect(renderer.render).toHaveBeenLastCalledWith(fakeVideo, []);
+  });
+
+  it("renders exactly once when the newly selected source emits synchronously", () => {
+    // Guards the other half of the fix above: re-rendering cues the
+    // source's own synchronous emission already rendered would remove and
+    // re-add every VTTCue, visibly flickering whichever cue is on screen.
+    const cues: CanonicalCue[] = [
+      { startSeconds: 1, endSeconds: 2, text: "first" },
+    ];
+    const other: CanonicalCue[] = [
+      { startSeconds: 3, endSeconds: 4, text: "second" },
+    ];
+    const sourceA = new SyncEmittingSubtitleSource(
+      asSubtitleSourceId("a"),
+      [track(1, "a")],
+      cues
+    );
+    const sourceB = new SyncEmittingSubtitleSource(
+      asSubtitleSourceId("b"),
+      [track(2, "b")],
+      other
+    );
+    const { controller, renderer } = setup([
+      sourceA as unknown as MockSubtitleSource,
+      sourceB as unknown as MockSubtitleSource,
+    ]);
+    const fakeVideo = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as HTMLVideoElement;
+    controller.attach(fakeVideo);
+
+    controller.selectTrack(asSubtitleTrackId(1));
+    const rendersAfterFirstSelect = renderer.render.mock.calls.length;
+
+    controller.selectTrack(asSubtitleTrackId(2));
+
+    expect(renderer.render.mock.calls.length).toBe(rendersAfterFirstSelect + 1);
+    expect(renderer.render).toHaveBeenLastCalledWith(fakeVideo, other);
+  });
+
   it("self-heals when the renderer reports its cues were wiped from outside (e.g. by hls.js)", () => {
     vi.useFakeTimers();
     try {

@@ -106,6 +106,96 @@ test.describe("@electron-media/core against a real browser + real hls.js", () =>
     ).toBe("");
   });
 
+  test("switching to a source that emits no cues clears the previous source's rendered cues", async ({ page }) => {
+    await page.goto("/core.html");
+    await page.evaluate((url) => (window as any).__loadSource(url), FIXTURE_URL);
+    await expect.poll(() => page.locator("#ready-state").textContent(), { timeout: 20_000 }).toBe("true");
+
+    // Park playback inside the static source's cue window (2s–3s) and keep it
+    // there — a running video would leave that window on its own and mask
+    // whether the switch actually cleared the cue.
+    await page.locator("#video").evaluate((video: HTMLVideoElement) => {
+      video.pause();
+      video.currentTime = 2.5;
+    });
+
+    await page.evaluate(() => (window as any).__selectSubtitleTrack(9999));
+    await expect.poll(
+      () => page.locator("#subtitle-cue-text").textContent(),
+      { timeout: 10_000 },
+    ).toBe("Delay test cue");
+
+    // HlsNativeSubtitleSource never emits cues of its own (hls.js paints its
+    // hidden TextTrack directly), so this is the exact switch that used to
+    // leave the static source's cue rendered indefinitely — the new track read
+    // as selected while the old subtitle stayed on screen.
+    const nativeTracks = await page.evaluate(() =>
+      (window as any)
+        .__getSubtitleTracks()
+        .filter((track: { sourceId: string }) => track.sourceId === "hls-native"),
+    );
+    expect(nativeTracks.length).toBeGreaterThanOrEqual(1);
+
+    await page.evaluate(
+      (trackId) => (window as any).__selectSubtitleTrack(trackId),
+      nativeTracks[0].trackId,
+    );
+
+    await expect.poll(
+      () => page.locator("#subtitle-cue-text").textContent(),
+      { timeout: 10_000 },
+    ).not.toBe("Delay test cue");
+  });
+
+  test("re-selecting a cue-caching source after switching away renders its cues again", async ({ page }) => {
+    await page.goto("/core.html");
+    await page.evaluate((url) => (window as any).__loadSource(url), FIXTURE_URL);
+    await expect.poll(() => page.locator("#ready-state").textContent(), { timeout: 20_000 }).toBe("true");
+
+    const vodTracks = await page.evaluate(() =>
+      (window as any)
+        .__getSubtitleTracks()
+        .filter((track: { sourceId: string }) => track.sourceId === "vod-extracted"),
+    );
+    expect(vodTracks.length).toBe(1);
+    const vodTrackId = vodTracks[0].trackId;
+
+    // 3.5s–5.5s carries a cue text unique to the VOD-extracted .vtt, so it
+    // can't be confused with the static source's or hls.js's own rendering.
+    const parkAt = async (seconds: number) => {
+      await page.locator("#video").evaluate((video: HTMLVideoElement, at) => {
+        video.pause();
+        video.currentTime = at;
+      }, seconds);
+    };
+
+    await parkAt(4);
+    await page.evaluate((trackId) => (window as any).__selectSubtitleTrack(trackId), vodTrackId);
+    await expect.poll(
+      () => page.locator("#subtitle-cue-text").textContent(),
+      { timeout: 10_000 },
+    ).toBe("Second fixture subtitle cue");
+
+    // Away…
+    await parkAt(2.5);
+    await page.evaluate(() => (window as any).__selectSubtitleTrack(9999));
+    await expect.poll(
+      () => page.locator("#subtitle-cue-text").textContent(),
+      { timeout: 10_000 },
+    ).toBe("Delay test cue");
+
+    // …and back. By now the VOD source has its whole .vtt cached, so its
+    // re-fetch finds nothing new — it used to emit nothing at all on this
+    // second selection, leaving the previous source's cue on screen and the
+    // re-selected track permanently blank.
+    await parkAt(4);
+    await page.evaluate((trackId) => (window as any).__selectSubtitleTrack(trackId), vodTrackId);
+    await expect.poll(
+      () => page.locator("#subtitle-cue-text").textContent(),
+      { timeout: 10_000 },
+    ).toBe("Second fixture subtitle cue");
+  });
+
   test("calling loadSource() again mid-playback tears down the old HLS instance and plays the new one", async ({ page }) => {
     await page.goto("/core.html");
     await page.evaluate((url) => (window as any).__loadSource(url), FIXTURE_URL);

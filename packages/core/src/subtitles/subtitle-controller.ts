@@ -164,12 +164,22 @@ export class SubtitleController {
     // selectTrack() itself. Subscribing afterwards would miss that
     // synchronous emission entirely: the track would show as selected but
     // never actually render.
+    let emittedDuringSelect = false;
     this.unsubscribeFromCues =
       source?.onCuesChanged(track.trackId, (cues) => {
+        emittedDuringSelect = true;
         this.canonicalCues = cues;
         this.rerender();
       }) ?? null;
     source?.selectTrack(track.trackId);
+    // A source that emits nothing synchronously must still take the screen:
+    // canonicalCues was cleared above, so without this the PREVIOUS track's
+    // cues stay rendered until (or forever, if) the new source emits. Hit by
+    // every switch to a still-fetching source, and permanently by one that
+    // never emits at all (HlsNativeSubtitleSource, where hls.js paints its
+    // own TextTrack instead). Skipped when the source already emitted, since
+    // re-rendering identical cues visibly flickers the on-screen cue.
+    if (!emittedDuringSelect) this.rerender();
     this.syncRepairLoop();
   }
 

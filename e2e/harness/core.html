@@ -24,6 +24,7 @@
       MediaPlayer,
       HlsJsAdapter,
       HlsNativeSubtitleSource,
+      VodExtractedSubtitleSource,
       asSubtitleSourceId,
       asSubtitleTrackId,
       TrackKind,
@@ -126,9 +127,32 @@
         reloadOnDetail: ["manifestLoadError", "manifestParsingError"],
         ...adapterOptions,
       });
+      // Appended LAST on purpose: getTracks() reports sources in registration
+      // order, and existing tests index subtitleTracks[0] expecting the
+      // hls-native track.
+      //
+      // Present so a test can exercise the real three-source shape a host app
+      // runs (manifest-embedded + transcode-extracted + remote), and
+      // specifically the re-selection round-trip: unlike the two above, this
+      // source caches fetched cues, so re-selecting it after switching away
+      // must re-emit them rather than silently render nothing.
+      const vodExtractedSource = new VodExtractedSubtitleSource({
+        sourceId: asSubtitleSourceId("vod-extracted"),
+        tracks: [
+          {
+            trackId: asSubtitleTrackId(200000),
+            displayName: "VOD extracted",
+            language: "en",
+            kind: TrackKind.Manual,
+            vttUrl: "/fixtures/cues.vtt",
+          },
+        ],
+      });
+
       const subtitleSources = [
         new HlsNativeSubtitleSource({ sourceId: asSubtitleSourceId("hls-native"), adapter }),
         new StaticSubtitleSource(),
+        vodExtractedSource,
       ];
 
       const player = new MediaPlayer({
