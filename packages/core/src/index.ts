@@ -11,6 +11,7 @@ export * from "./contracts/subtitle-gateway.js";
 
 export * from "./hls/hls-adapter.js";
 export * from "./hls/hls-js-adapter.js";
+export * from "./hls/attached-hls-adapter.js";
 export * from "./hls/hls-controller.js";
 export * from "./hls/audio-track-controller.js";
 

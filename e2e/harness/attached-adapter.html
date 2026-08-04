@@ -1,0 +1,158 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>attached-adapter harness</title>
+  <script type="importmap">
+    { "imports": { "hls.js": "/vendor/hls.mjs" } }
+  </script>
+</head>
+<body>
+  <video id="video" muted playsinline width="320" height="180"></video>
+  <div>ready: <span id="ready-state">false</span></div>
+  <div>error: <span id="error-message"></span></div>
+  <div>selected audio track id: <span id="selected-audio-track-id"></span></div>
+  <ul id="audio-track-list"></ul>
+  <div>selected subtitle track id: <span id="selected-subtitle-track-id"></span></div>
+  <div id="subtitle-cue-text"></div>
+
+  <script type="module">
+    import Hls from "hls.js";
+    import {
+      AttachedHlsAdapter,
+      AudioTrackController,
+      HlsNativeSubtitleSource,
+      SubtitleRegistry,
+      SubtitleSelectionService,
+      SubtitleDelayProcessor,
+      TextTrackCueRenderer,
+      SubtitleController,
+      asSubtitleSourceId,
+    } from "/core/index.js";
+
+    // This harness plays the "host application owns the Hls instance"
+    // role deliberately — it creates/destroys `Hls` itself (the way
+    // xcloud-smart-applications' useHlsSource.ts does) and only ever
+    // *observes* it through AttachedHlsAdapter, never through HlsJsAdapter
+    // or MediaPlayer (which own the instance themselves and therefore
+    // can't exercise this adapter at all).
+
+    const video = document.getElementById("video");
+    const readyState = document.getElementById("ready-state");
+    const errorMessage = document.getElementById("error-message");
+    const selectedAudioTrackId = document.getElementById("selected-audio-track-id");
+    const audioTrackList = document.getElementById("audio-track-list");
+    const selectedSubtitleTrackId = document.getElementById("selected-subtitle-track-id");
+    const subtitleCueText = document.getElementById("subtitle-cue-text");
+
+    const adapter = new AttachedHlsAdapter();
+    const audio = new AudioTrackController({ adapter });
+    const nativeSubtitleSource = new HlsNativeSubtitleSource({
+      sourceId: asSubtitleSourceId("hls-native"),
+      adapter,
+    });
+    const registry = new SubtitleRegistry({ sources: [nativeSubtitleSource] });
+    const selection = new SubtitleSelectionService({ registry });
+    const delay = new SubtitleDelayProcessor();
+    const renderer = new TextTrackCueRenderer({});
+    const subtitles = new SubtitleController({ registry, selection, delay, renderer });
+    subtitles.attach(video);
+
+    function renderAudioTracks() {
+      const tracks = audio.getTracks();
+      const selectedId = audio.selectedTrackId;
+      selectedAudioTrackId.textContent = selectedId === null ? "" : String(selectedId);
+      audioTrackList.innerHTML = "";
+      for (const track of tracks) {
+        const li = document.createElement("li");
+        const button = document.createElement("button");
+        button.dataset.trackId = String(track.trackId);
+        button.dataset.language = track.language ?? "";
+        button.textContent = `${track.language ?? track.displayName} (${track.trackId})`;
+        if (track.trackId === selectedId) button.classList.add("selected");
+        button.addEventListener("click", () => audio.select(track.trackId));
+        li.appendChild(button);
+        audioTrackList.appendChild(li);
+      }
+    }
+    audio.onTracksChanged(renderAudioTracks);
+    audio.onSelectionChanged(renderAudioTracks);
+
+    subtitles.onSelectionChanged((track) => {
+      selectedSubtitleTrackId.textContent = track ? String(track.trackId) : "";
+    });
+
+    let hls = null;
+
+    // Mirrors useHlsSource.ts's correct path: destroy the old instance AND
+    // call detachHls() before creating/attaching the new one.
+    function createAndAttach(url) {
+      if (hls) {
+        hls.destroy();
+        adapter.detachHls();
+      }
+      readyState.textContent = "false";
+      errorMessage.textContent = "";
+
+      hls = new Hls({});
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        readyState.textContent = "true";
+        video.play().catch(() => {});
+      });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (data.fatal) errorMessage.textContent = `${data.details}|fatal:true`;
+      });
+      adapter.attachHls(hls);
+      hls.loadSource(url);
+      hls.attachMedia(video);
+    }
+
+    // Deliberately reproduces the app-side bug this whole effort exists to
+    // fix: destroys the old Hls instance and creates/attaches a new one
+    // WITHOUT ever calling detachHls() in between. Exists to prove the
+    // adapter itself stays inert/harmless even when a caller forgets the
+    // pairing — not to prove correctness during that specific gap, which is
+    // exactly what the real fix (in useTranscodePlayback.ts/useMediaPlayer.ts)
+    // addresses on the app side, not in this library.
+    function createAndAttachWithoutDetach(url) {
+      if (hls) {
+        hls.destroy();
+        // No adapter.detachHls() call here — intentional.
+      }
+      readyState.textContent = "false";
+      errorMessage.textContent = "";
+
+      hls = new Hls({});
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        readyState.textContent = "true";
+        video.play().catch(() => {});
+      });
+      adapter.attachHls(hls);
+      hls.loadSource(url);
+      hls.attachMedia(video);
+    }
+
+    window.__loadSource = (url) => createAndAttach(url);
+    window.__reloadWithoutDetach = (url) => createAndAttachWithoutDetach(url);
+    window.__detach = () => adapter.detachHls();
+    window.__getAudioTracks = () => audio.getTracks();
+    window.__selectAudioTrack = (trackId) => audio.select(trackId);
+    window.__getSubtitleTracks = () => subtitles.getTracks();
+    window.__selectSubtitleTrack = (trackId) => subtitles.selectTrack(trackId);
+    window.__removeVideoFromDom = () => video.remove();
+
+    // hls.js renders HlsNativeSubtitleSource cues directly onto its own
+    // hidden TextTrack — poll activeCues the same way core.html does.
+    setInterval(() => {
+      let activeCueText = "";
+      for (const track of video.textTracks) {
+        if (!track.activeCues || track.activeCues.length === 0) continue;
+        for (const cue of track.activeCues) {
+          if (cue.text) activeCueText = cue.text;
+        }
+      }
+      subtitleCueText.textContent = activeCueText;
+    }, 100);
+  </script>
+</body>
+</html>
