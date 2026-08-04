@@ -57,6 +57,47 @@ test.describe("AttachedHlsAdapter against a real browser + real hls.js (host-own
     await expect.poll(() => page.locator("#ready-state").textContent(), { timeout: 20_000 }).toBe("true");
   });
 
+  test("keeps the user's audio track choice across a destroy + rebuild of the Hls instance (seek)", async ({ page }) => {
+    await page.goto("/attached-adapter.html");
+    await page.evaluate(() => localStorage.removeItem("e2e-attached-audio-language"));
+    await page.evaluate((url) => (window as any).__loadSource(url), FIXTURE_URL);
+    await expect.poll(() => page.locator("#audio-track-list li").count(), { timeout: 20_000 }).toBe(2);
+
+    // Pick whichever track is not the auto-selected default.
+    const otherButton = page.locator("#audio-track-list button:not(.selected)").first();
+    const chosenLanguage = await otherButton.getAttribute("data-language");
+    const chosenTrackId = await otherButton.getAttribute("data-track-id");
+    await otherButton.click();
+    await expect.poll(() => page.locator("#selected-audio-track-id").textContent()).toBe(chosenTrackId);
+    await expect.poll(() => page.evaluate(() => (window as any).__getHlsAudioTrack())).toBe(
+      Number(chosenTrackId),
+    );
+
+    // A full re-transcode seek: the host destroys its Hls instance, detaches,
+    // and attaches a brand-new one. The replacement carries no selection of
+    // its own, so the stored language has to be re-applied — it used to fall
+    // back to the manifest default instead.
+    await page.evaluate((url) => (window as any).__loadSource(url), FIXTURE_URL);
+    await expect.poll(() => page.locator("#audio-track-list li").count(), { timeout: 20_000 }).toBe(2);
+
+    // Asserted against the engine, not the controller/UI: the controller keeps
+    // reporting the old pick either way, so only hls.audioTrack reveals
+    // whether the choice actually reached the new instance.
+    await expect.poll(
+      () => page.evaluate(() => (window as any).__getHlsAudioTrack()),
+      { timeout: 10_000 },
+    ).toBe(Number(chosenTrackId));
+
+    const selectedLanguage = await page.evaluate(
+      (trackId) =>
+        (window as any)
+          .__getAudioTracks()
+          .find((track: { trackId: number }) => track.trackId === trackId)?.language,
+      Number(chosenTrackId),
+    );
+    expect(selectedLanguage).toBe(chosenLanguage);
+  });
+
   test("bad case: destroying and recreating the Hls instance WITHOUT calling detachHls does not throw or hang, and the new instance's tracks still populate", async ({ page }) => {
     await page.goto("/attached-adapter.html");
     await page.evaluate((url) => (window as any).__loadSource(url), FIXTURE_URL);

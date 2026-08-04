@@ -82,6 +82,51 @@ describe("AudioTrackController", () => {
     expect(adapter.selectedAudioTrackId).toBe(2);
   });
 
+  it("re-applies the stored language to a new stream's tracks after a detach, despite an earlier explicit select", () => {
+    // The regression this guards: a seek that rebuilds the underlying engine
+    // makes the adapter report an empty list and then the new instance's
+    // tracks. The `hasUserSelected` latch used to survive that and short-
+    // circuit the restore, so the replacement instance — which carries no
+    // selection of its own — fell back to the manifest default and the user's
+    // audio choice was lost on every seek.
+    const adapter = new MockHlsAdapter();
+    const preferenceStore = makePreferenceStore("fr");
+    const controller = new AudioTrackController({ adapter, preferenceStore });
+    const tracks = [track(1, "en", TrackKind.Default), track(2, "fr")];
+
+    // A real adapter's getAudioTracks() reflects whatever it last reported, so
+    // the mock's snapshot is kept in step with each emission.
+    adapter.audioTracks = tracks;
+    adapter.emit("audioTracksChanged", { tracks });
+    controller.select(asAudioTrackId(2));
+    expect(preferenceStore.setAudioLanguage).toHaveBeenCalledWith("fr");
+
+    // Seek: adapter detaches from the old instance, then the fresh one reports
+    // the same renditions with nothing selected yet.
+    adapter.audioTracks = [];
+    adapter.emit("audioTracksChanged", { tracks: [] });
+    adapter.selectedAudioTrackId = null;
+    adapter.audioTracks = tracks;
+    adapter.emit("audioTracksChanged", { tracks });
+
+    expect(adapter.selectedAudioTrackId).toBe(2);
+  });
+
+  it("keeps reporting the current selection when the adapter reports an empty list", () => {
+    // The latch reset above must not double as a selection reset: the UI would
+    // flash "no audio track" on every seek.
+    const adapter = new MockHlsAdapter();
+    const controller = new AudioTrackController({ adapter });
+    adapter.emit("audioTracksChanged", { tracks: [track(1, "en", TrackKind.Default)] });
+    const listener = vi.fn();
+    controller.onSelectionChanged(listener);
+
+    adapter.emit("audioTracksChanged", { tracks: [] });
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(controller.selectedTrackId).toBe(1);
+  });
+
   it("select() sets the adapter's audio track", () => {
     const adapter = new MockHlsAdapter();
     adapter.audioTracks = [track(1, "en"), track(2, "fr")];

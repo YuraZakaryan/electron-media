@@ -45,8 +45,23 @@
     const selectedSubtitleTrackId = document.getElementById("selected-subtitle-track-id");
     const subtitleCueText = document.getElementById("subtitle-cue-text");
 
+    // localStorage-backed so an audio choice survives the Hls instance being
+    // destroyed and rebuilt — the shape a real host app uses, and the only way
+    // to observe the after-seek restore.
+    class LocalStoragePreferenceStore {
+      getAudioLanguage() {
+        return localStorage.getItem("e2e-attached-audio-language");
+      }
+      setAudioLanguage(language) {
+        localStorage.setItem("e2e-attached-audio-language", language);
+      }
+    }
+
     const adapter = new AttachedHlsAdapter();
-    const audio = new AudioTrackController({ adapter });
+    const audio = new AudioTrackController({
+      adapter,
+      preferenceStore: new LocalStoragePreferenceStore(),
+    });
     const nativeSubtitleSource = new HlsNativeSubtitleSource({
       sourceId: asSubtitleSourceId("hls-native"),
       adapter,
@@ -136,6 +151,12 @@
     window.__reloadWithoutDetach = (url) => createAndAttachWithoutDetach(url);
     window.__detach = () => adapter.detachHls();
     window.__getAudioTracks = () => audio.getTracks();
+    // Ground truth for what is actually being decoded. The controller's own
+    // selectedTrackId can disagree with it: the controller keeps the user's
+    // last pick while a freshly built Hls instance falls back to the manifest
+    // default, so asserting on the controller (or the UI drawn from it) would
+    // pass even when the wrong audio is playing.
+    window.__getHlsAudioTrack = () => (hls ? hls.audioTrack : null);
     window.__selectAudioTrack = (trackId) => audio.select(trackId);
     window.__getSubtitleTracks = () => subtitles.getTracks();
     window.__selectSubtitleTrack = (trackId) => subtitles.selectTrack(trackId);

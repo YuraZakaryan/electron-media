@@ -31,6 +31,23 @@ export class AudioTrackController {
     this.preferenceStore = options.preferenceStore;
 
     this.adapter.on("audioTracksChanged", ({ tracks }) => {
+      // An empty list means the adapter detached from its engine — a stream
+      // teardown, e.g. a seek that rebuilds the underlying `Hls` instance.
+      // The replacement instance starts with no selection of its own, so the
+      // "user already chose" latch has to clear here: left set, it makes the
+      // handler below bail out on the new track list and the user's choice is
+      // silently dropped back to the manifest default. Clearing it instead
+      // re-runs the stored-language restore that `select` persisted, so the
+      // same language carries across into the new stream.
+      //
+      // `currentTrackId` is deliberately kept: setSelected still forwards to
+      // the adapter before comparing ids, so the new engine instance gets the
+      // track applied even when the resolved id is unchanged, without emitting
+      // a redundant selection change.
+      if (tracks.length === 0) {
+        this.hasUserSelected = false;
+        return;
+      }
       if (this.hasUserSelected) return;
       const preferred = this.resolvePreferredTrack(tracks);
       if (preferred) this.setSelected(preferred.trackId);
