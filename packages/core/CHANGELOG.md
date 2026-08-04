@@ -1,5 +1,11 @@
 # @electron-media/core
 
+## 0.2.5
+
+### Patch Changes
+
+- edba37c: Add `repository`/`bugs` fields pointing to the GitHub repo, and document every public method/hook return field in each package's README.
+
 ## 0.2.4
 
 ### Patch Changes

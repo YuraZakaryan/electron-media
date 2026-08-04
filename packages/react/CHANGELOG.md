@@ -1,5 +1,13 @@
 # @electron-media/react
 
+## 0.1.10
+
+### Patch Changes
+
+- edba37c: Add `repository`/`bugs` fields pointing to the GitHub repo, and document every public method/hook return field in each package's README.
+- Updated dependencies [edba37c]
+  - @electron-media/core@0.2.5
+
 ## 0.1.9
 
 ### Patch Changes
