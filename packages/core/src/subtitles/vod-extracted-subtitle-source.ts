@@ -83,7 +83,13 @@ export class VodExtractedSubtitleSource implements ISubtitleSource {
     options.tracks.forEach((track) => this.tracksById.set(track.trackId, track));
     this.baselineOffsetSeconds = options.baselineOffsetSeconds ?? 0;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    // Wrapped rather than stored bare: `this.fetchImpl(...)` would invoke the
+    // global `fetch` with this instance as its receiver, which browsers reject
+    // outright ("Illegal invocation"). That throw is synchronous, so it escapes
+    // before the `.catch()` on the returned promise can apply — the rejection
+    // surfaced nowhere and every track silently produced no cues at all.
+    this.fetchImpl =
+      options.fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
   }
 
   /**
@@ -164,9 +170,16 @@ export class VodExtractedSubtitleSource implements ISubtitleSource {
     trackId: SubtitleTrackId,
     vttUrl: string
   ): Promise<void> {
-    const response = await this.fetchImpl(vttUrl, { cache: "no-store" }).catch(
-      () => null
-    );
+    // try/catch rather than `.catch()` on the returned promise: a `fetchImpl`
+    // that throws synchronously never returns a promise to attach a handler
+    // to, so the failure used to escape this method entirely and land as an
+    // unhandled rejection in the caller, which does not await it.
+    let response: Response | null;
+    try {
+      response = await this.fetchImpl(vttUrl, { cache: "no-store" });
+    } catch {
+      response = null;
+    }
     if (!response || !response.ok) {
       // A 404 means this session's directory is gone (e.g. a seek replaced
       // it) — stop polling a dead URL rather than hammering it every tick.

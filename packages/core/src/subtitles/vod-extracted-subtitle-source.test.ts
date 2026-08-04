@@ -287,6 +287,68 @@ describe("VodExtractedSubtitleSource", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("uses the global fetch without making it the instance's own method", async () => {
+    // Browsers throw "Illegal invocation" when `fetch` runs with a foreign
+    // receiver, which is exactly what storing the global on the instance and
+    // calling `this.fetchImpl(...)` did. The throw is synchronous, so it
+    // escaped before any handler on the returned promise applied: nothing
+    // surfaced anywhere and every track silently produced no cues.
+    vi.useFakeTimers();
+    const globalFetch = vi.fn(function (this: unknown) {
+      if (this !== undefined && this !== globalThis) {
+        throw new TypeError("Illegal invocation");
+      }
+      return Promise.resolve(
+        fakeResponse({ text: vttWithCues(["00:01.000", "00:02.000", "Hello"]) })
+      );
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = globalFetch as unknown as typeof fetch;
+
+    try {
+      const source = new VodExtractedSubtitleSource({
+        sourceId: SOURCE_ID,
+        tracks: [
+          { trackId: TRACK_ID, displayName: "English", kind: TrackKind.Default, vttUrl: "/vod/en.vtt" },
+        ],
+        // fetchImpl deliberately omitted — this exercises the default.
+      });
+      const listener = vi.fn();
+      source.onCuesChanged(TRACK_ID, listener);
+
+      source.selectTrack(TRACK_ID);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(globalFetch).toHaveBeenCalled();
+      expect(listener).toHaveBeenCalledWith([
+        { startSeconds: 1, endSeconds: 2, text: "Hello" },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("a fetchImpl that throws synchronously is contained, not left as an unhandled rejection", async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn(() => {
+      throw new TypeError("Illegal invocation");
+    }) as unknown as typeof fetch;
+    const source = new VodExtractedSubtitleSource({
+      sourceId: SOURCE_ID,
+      tracks: [
+        { trackId: TRACK_ID, displayName: "English", kind: TrackKind.Default, vttUrl: "/vod/en.vtt" },
+      ],
+      fetchImpl,
+    });
+    const listener = vi.fn();
+    source.onCuesChanged(TRACK_ID, listener);
+
+    expect(() => source.selectTrack(TRACK_ID)).not.toThrow();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("a fetch that rejects outright is treated the same as a failed response — no crash, no emission", async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error("network down"));
     const source = new VodExtractedSubtitleSource({
