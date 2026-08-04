@@ -257,6 +257,119 @@ describe("SubtitleController", () => {
     expect(renderer.render).toHaveBeenLastCalledWith(fakeVideo, other);
   });
 
+  it("rebinds the active selection onto a replacement source registered under the same sourceId", () => {
+    // The regression this guards: a host starting a new session (a seek that
+    // re-runs the transcode) unregisters its VOD-extracted source and
+    // registers a fresh instance under the same sourceId. The selection never
+    // changes, so the selection service stays silent — the controller used to
+    // keep its cue subscription on the disposed instance while the replacement
+    // was never told anything was selected. The track read as selected and
+    // rendered nothing until the user picked it again, on every seek.
+    const registry = new SubtitleRegistry({ sources: [] });
+    const selection = new SubtitleSelectionService({ registry });
+    const delay = new SubtitleDelayProcessor();
+    const renderer = stubRenderer();
+    const controller = new SubtitleController({
+      registry,
+      selection,
+      delay,
+      renderer,
+    });
+    const fakeVideo = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as HTMLVideoElement;
+    controller.attach(fakeVideo);
+
+    const first = new MockSubtitleSource(asSubtitleSourceId("vod"), [
+      track(1, "vod"),
+    ]);
+    registry.registerSource(first);
+    controller.selectTrack(asSubtitleTrackId(1));
+    expect(first.selectedTrackId).toBe(1);
+
+    // The session swap.
+    registry.unregisterSource(asSubtitleSourceId("vod"));
+    const replacement = new MockSubtitleSource(asSubtitleSourceId("vod"), [
+      track(1, "vod"),
+    ]);
+    registry.registerSource(replacement);
+
+    // The replacement must have been told about the still-active selection…
+    expect(replacement.selectedTrackId).toBe(1);
+    // …and its cues must now reach the renderer.
+    const cues: CanonicalCue[] = [
+      { startSeconds: 1, endSeconds: 2, text: "after seek" },
+    ];
+    replacement.emitCues(asSubtitleTrackId(1), cues);
+    expect(renderer.render).toHaveBeenLastCalledWith(fakeVideo, cues);
+  });
+
+  it("stops rendering cues emitted by a source that has been replaced", () => {
+    const registry = new SubtitleRegistry({ sources: [] });
+    const selection = new SubtitleSelectionService({ registry });
+    const delay = new SubtitleDelayProcessor();
+    const renderer = stubRenderer();
+    const controller = new SubtitleController({
+      registry,
+      selection,
+      delay,
+      renderer,
+    });
+    const fakeVideo = {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as HTMLVideoElement;
+    controller.attach(fakeVideo);
+
+    const first = new MockSubtitleSource(asSubtitleSourceId("vod"), [
+      track(1, "vod"),
+    ]);
+    registry.registerSource(first);
+    controller.selectTrack(asSubtitleTrackId(1));
+
+    registry.unregisterSource(asSubtitleSourceId("vod"));
+    const replacement = new MockSubtitleSource(asSubtitleSourceId("vod"), [
+      track(1, "vod"),
+    ]);
+    registry.registerSource(replacement);
+    renderer.render.mockClear();
+
+    // A late emission from the disposed instance must not paint over what the
+    // replacement is responsible for.
+    first.emitCues(asSubtitleTrackId(1), [
+      { startSeconds: 9, endSeconds: 10, text: "stale session" },
+    ]);
+
+    expect(renderer.render).not.toHaveBeenCalled();
+  });
+
+  it("leaves the selection alone when the replacement source no longer offers the selected track", () => {
+    const registry = new SubtitleRegistry({ sources: [] });
+    const selection = new SubtitleSelectionService({ registry });
+    const delay = new SubtitleDelayProcessor();
+    const renderer = stubRenderer();
+    const controller = new SubtitleController({
+      registry,
+      selection,
+      delay,
+      renderer,
+    });
+    const first = new MockSubtitleSource(asSubtitleSourceId("vod"), [
+      track(1, "vod"),
+    ]);
+    registry.registerSource(first);
+    controller.selectTrack(asSubtitleTrackId(1));
+
+    registry.unregisterSource(asSubtitleSourceId("vod"));
+    const replacement = new MockSubtitleSource(asSubtitleSourceId("vod"), [
+      track(2, "vod"),
+    ]);
+    registry.registerSource(replacement);
+
+    expect(replacement.selectedTrackId).toBeNull();
+  });
+
   it("self-heals when the renderer reports its cues were wiped from outside (e.g. by hls.js)", () => {
     vi.useFakeTimers();
     try {

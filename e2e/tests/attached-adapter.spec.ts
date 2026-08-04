@@ -116,6 +116,52 @@ test.describe("AttachedHlsAdapter against a real browser + real hls.js (host-own
     expect(pageErrors).toEqual([]);
   });
 
+  test("a selected VOD-extracted track keeps rendering after its source instance is replaced (seek)", async ({ page }) => {
+    await page.goto("/attached-adapter.html");
+    await page.evaluate((url) => (window as any).__loadSource(url), FIXTURE_URL);
+    await expect.poll(() => page.locator("#ready-state").textContent(), { timeout: 20_000 }).toBe("true");
+
+    const parkAt = async (seconds: number) => {
+      await page.locator("#video").evaluate((video: HTMLVideoElement, at) => {
+        video.pause();
+        video.currentTime = at;
+      }, seconds);
+    };
+
+    await parkAt(4);
+    await page.evaluate(() =>
+      (window as any).__selectSubtitleTrack((window as any).__vodTrackId),
+    );
+    await expect.poll(
+      () => page.locator("#subtitle-cue-text").textContent(),
+      { timeout: 10_000 },
+    ).toBe("Second fixture subtitle cue");
+
+    // A faithful seek: the host swaps in a new source instance for the new
+    // session AND rebuilds its Hls instance. Both halves matter — the rebuild
+    // wipes every TextTrack hls.js does not own (so the cue already on screen
+    // disappears), and the swap orphans the controller's cue subscription on
+    // the disposed instance. Nothing re-selects the track, so the controller
+    // has to notice the swap itself; it used to leave the replacement idle and
+    // the track stayed selected while rendering nothing until the user picked
+    // it again.
+    await page.evaluate(() => (window as any).__replaceVodSource());
+    await page.evaluate((url) => (window as any).__loadSource(url), FIXTURE_URL);
+    await expect.poll(() => page.locator("#ready-state").textContent(), { timeout: 20_000 }).toBe("true");
+
+    // The replacement shifts the same .vtt by its own 3.5s baseline, so the
+    // third fixture cue (5.5s–7.5s in the file) now covers 2s–4s. Asserting on
+    // *that* is what makes the test discriminating: cues held over from the
+    // disposed instance are unshifted, leaving nothing on screen at this
+    // position, so a stale binding cannot pass.
+    await parkAt(3.2);
+
+    await expect.poll(
+      () => page.locator("#subtitle-cue-text").textContent(),
+      { timeout: 10_000 },
+    ).toBe("Third fixture subtitle cue");
+  });
+
   test("bad case: loading an invalid URL surfaces a fatal error without an unhandled exception", async ({ page }) => {
     await page.goto("/attached-adapter.html");
 

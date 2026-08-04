@@ -27,7 +27,10 @@
       SubtitleDelayProcessor,
       TextTrackCueRenderer,
       SubtitleController,
+      VodExtractedSubtitleSource,
       asSubtitleSourceId,
+      asSubtitleTrackId,
+      TrackKind,
     } from "/core/index.js";
 
     // This harness plays the "host application owns the Hls instance"
@@ -72,6 +75,45 @@
     const renderer = new TextTrackCueRenderer({});
     const subtitles = new SubtitleController({ registry, selection, delay, renderer });
     subtitles.attach(video);
+
+    // A VOD-extracted source whose instance can be swapped on demand, the way
+    // a host does for each new transcode session: the track list is fixed at
+    // construction, so a new session means unregister + register a fresh
+    // instance under the same sourceId.
+    const VOD_SOURCE_ID = asSubtitleSourceId("vod-extracted");
+    const VOD_TRACK_ID = asSubtitleTrackId(200000);
+
+    function makeVodSource(baselineOffsetSeconds = 0) {
+      return new VodExtractedSubtitleSource({
+        sourceId: VOD_SOURCE_ID,
+        baselineOffsetSeconds,
+        tracks: [
+          {
+            trackId: VOD_TRACK_ID,
+            displayName: "VOD extracted",
+            language: "en",
+            kind: TrackKind.Manual,
+            vttUrl: "/fixtures/cues.vtt",
+          },
+        ],
+      });
+    }
+
+    registry.registerSource(makeVodSource());
+
+    // Stands in for a seek: the previous session's source is disposed and a
+    // brand-new instance takes its place, without the selection changing.
+    //
+    // The replacement carries its own baseline, as a real new session does —
+    // which is what makes a stale binding observable. Cues held over from the
+    // previous instance are projected against the OLD baseline and land in the
+    // wrong place (or out of range entirely), so "the previous cue is still on
+    // screen" cannot be mistaken for the replacement having been bound.
+    window.__replaceVodSource = () => {
+      registry.unregisterSource(VOD_SOURCE_ID);
+      registry.registerSource(makeVodSource(3.5));
+    };
+    window.__vodTrackId = VOD_TRACK_ID;
 
     function renderAudioTracks() {
       const tracks = audio.getTracks();

@@ -55,8 +55,11 @@ export class SubtitleController {
   private canonicalCues: readonly CanonicalCue[] = [];
   private unsubscribeFromCues: (() => void) | null = null;
   private previouslySelectedTrack: SubtitleTrack | null = null;
+  /** The exact source instance {@link unsubscribeFromCues} belongs to, so a swapped-out instance can be detected. */
+  private subscribedSource: ISubtitleSource | null = null;
   private readonly unsubscribeFromSelection: () => void;
   private readonly unsubscribeFromDelay: () => void;
+  private readonly unsubscribeFromRegistry: () => void;
   private repairIntervalId: ReturnType<typeof setInterval> | null = null;
   private repairEventTarget: HTMLVideoElement | null = null;
   private readonly handleRepairTick = () => this.repairIfWiped();
@@ -72,6 +75,9 @@ export class SubtitleController {
     );
     this.unsubscribeFromDelay = this.delay.onDelayChanged(() =>
       this.rerender()
+    );
+    this.unsubscribeFromRegistry = this.registry.onTracksChanged(() =>
+      this.rebindIfSourceReplaced()
     );
   }
 
@@ -128,8 +134,10 @@ export class SubtitleController {
     this.stopRepairLoop();
     this.unsubscribeFromCues?.();
     this.unsubscribeFromCues = null;
+    this.subscribedSource = null;
     this.unsubscribeFromSelection();
     this.unsubscribeFromDelay();
+    this.unsubscribeFromRegistry();
     this.renderer.clear();
     this.video = null;
   }
@@ -153,34 +161,83 @@ export class SubtitleController {
     }
 
     if (!track) {
+      this.subscribedSource = null;
       this.rerender();
       return;
     }
 
+    this.bindSelectedTrack(track);
+  }
+
+  /**
+   * Subscribes to `track`'s cues on whichever source currently owns it and
+   * tells that source to select it.
+   *
+   * Separate from {@link handleSelectionChanged} so a source instance replaced
+   * underneath an unchanged selection can be rebound without routing back
+   * through the selection service — see {@link rebindIfSourceReplaced}.
+   */
+  private bindSelectedTrack(track: SubtitleTrack): void {
     const source = this.findSource(track.sourceId);
+    this.subscribedSource = source ?? null;
+
     // Subscribe BEFORE calling selectTrack — a source that already has this
     // track's cues cached (e.g. OpenSubtitlesSource re-selecting a
     // previously-downloaded track) emits them synchronously from within
     // selectTrack() itself. Subscribing afterwards would miss that
     // synchronous emission entirely: the track would show as selected but
     // never actually render.
-    let emittedDuringSelect = false;
+    let emittedDuringBind = false;
     this.unsubscribeFromCues =
       source?.onCuesChanged(track.trackId, (cues) => {
-        emittedDuringSelect = true;
+        emittedDuringBind = true;
         this.canonicalCues = cues;
         this.rerender();
       }) ?? null;
     source?.selectTrack(track.trackId);
     // A source that emits nothing synchronously must still take the screen:
-    // canonicalCues was cleared above, so without this the PREVIOUS track's
-    // cues stay rendered until (or forever, if) the new source emits. Hit by
-    // every switch to a still-fetching source, and permanently by one that
-    // never emits at all (HlsNativeSubtitleSource, where hls.js paints its
-    // own TextTrack instead). Skipped when the source already emitted, since
-    // re-rendering identical cues visibly flickers the on-screen cue.
-    if (!emittedDuringSelect) this.rerender();
+    // canonicalCues was cleared by the caller, so without this the PREVIOUS
+    // track's cues stay rendered until (or forever, if) the new source emits.
+    // Hit by every switch to a still-fetching source, and permanently by one
+    // that never emits at all (HlsNativeSubtitleSource, where hls.js paints
+    // its own TextTrack instead). Skipped when the source already emitted,
+    // since re-rendering identical cues visibly flickers the on-screen cue.
+    if (!emittedDuringBind) this.rerender();
     this.syncRepairLoop();
+  }
+
+  /**
+   * Rebinds the active selection when the source instance backing it has been
+   * replaced — a host starting a new session (e.g. a seek that re-runs the
+   * transcode) unregisters its {@link VodExtractedSubtitleSource} and
+   * registers a brand-new instance under the same `sourceId`.
+   *
+   * The selection itself never changes across that swap, so the selection
+   * service stays silent and {@link handleSelectionChanged} never runs. Left
+   * alone, the controller keeps a cue subscription on the disposed instance
+   * while the replacement is never told anything is selected at all — the
+   * track reads as selected and renders nothing until the user picks it again.
+   */
+  private rebindIfSourceReplaced(): void {
+    const selected = this.selection.selected;
+    if (!selected) return;
+
+    const currentSource = this.findSource(selected.sourceId);
+    // Nothing to rebind onto yet (mid-swap, between unregister and register),
+    // or still the very same instance — the common case, since this runs on
+    // every track-list change from any source.
+    if (!currentSource || currentSource === this.subscribedSource) return;
+    // The replacement may not carry the selected track at all; leave the
+    // selection untouched rather than binding a track that does not exist.
+    const stillOffered = currentSource
+      .getTracks()
+      .some((track) => track.trackId === selected.trackId);
+    if (!stillOffered) return;
+
+    this.unsubscribeFromCues?.();
+    this.unsubscribeFromCues = null;
+    this.canonicalCues = [];
+    this.bindSelectedTrack(selected);
   }
 
   private findSource(sourceId: SubtitleSourceId): ISubtitleSource | undefined {
