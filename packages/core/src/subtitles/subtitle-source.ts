@@ -20,6 +20,17 @@ export interface ISubtitleSource {
   readonly sourceId: SubtitleSourceId;
 
   /**
+   * `true` when this source draws its own cues directly onto the video
+   * element (e.g. hls.js's native `TextTrack` rendering) rather than relying
+   * on a host-supplied {@link ISubtitleRenderer}. {@link SubtitleController}
+   * uses this to skip re-rendering cues from this source itself — doing so
+   * unconditionally would visually duplicate every cue the source is already
+   * painting on its own. Omit (or `false`) for the common case of a source
+   * whose cue text has no display mechanism of its own.
+   */
+  readonly rendersNatively?: boolean;
+
+  /**
    * Returns the tracks currently exposed by this source.
    *
    * The returned array is a snapshot and will not update automatically —

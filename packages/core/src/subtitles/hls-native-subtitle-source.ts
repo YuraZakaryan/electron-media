@@ -11,17 +11,21 @@ export interface HlsNativeSubtitleSourceOptions {
 }
 
 /**
- * Subtitle source for tracks embedded in the HLS manifest itself. Unlike
- * {@link VodExtractedSubtitleSource} and {@link OpenSubtitlesSource}, this
- * source never emits cues — hls.js renders WebVTT/IMSC1 subtitle tracks onto
- * its own hidden TextTrack automatically once `hls.subtitleTrack` is set, so
- * {@link onCuesChanged} intentionally has no subscribers to notify.
- * Track selection is delegated straight to the {@link IHlsAdapter}.
+ * Subtitle source for tracks embedded in the HLS manifest itself. hls.js
+ * renders WebVTT/IMSC1 subtitle tracks onto its own native `TextTrack`
+ * automatically once `hls.subtitleTrack` is set — {@link onCuesChanged}
+ * forwards whatever the adapter reads back off that same native TextTrack
+ * (see {@link IHlsAdapter}'s `subtitleCuesChanged` event), if the adapter
+ * implements it; an adapter that doesn't simply means nothing is ever
+ * forwarded, the previous behavior of this class entirely. Track selection
+ * is delegated straight to the {@link IHlsAdapter}.
  *
  * @public
  */
 export class HlsNativeSubtitleSource implements ISubtitleSource {
   readonly sourceId: SubtitleSourceId;
+  /** hls.js paints this track's cues onto its own native TextTrack directly — see {@link ISubtitleSource.rendersNatively}. */
+  readonly rendersNatively = true;
   private readonly adapter: IHlsAdapter;
 
   constructor(options: HlsNativeSubtitleSourceOptions) {
@@ -45,12 +49,13 @@ export class HlsNativeSubtitleSource implements ISubtitleSource {
     );
   }
 
-  /** Never fires — hls.js renders its own subtitle tracks; see class docs. */
   onCuesChanged(
-    _trackId: SubtitleTrackId,
-    _callback: (cues: readonly CanonicalCue[]) => void
+    trackId: SubtitleTrackId,
+    callback: (cues: readonly CanonicalCue[]) => void
   ): () => void {
-    return () => {};
+    return this.adapter.on("subtitleCuesChanged", (payload) => {
+      if (payload.trackId === trackId) callback(payload.cues);
+    });
   }
 
   dispose(): void {

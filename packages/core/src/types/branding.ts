@@ -21,6 +21,21 @@ export type SubtitleTrackId = number & { readonly __brand: "SubtitleTrackId" };
  */
 export type SubtitleSourceId = string & { readonly __brand: "SubtitleSourceId" };
 
+/**
+ * Branded string identifier for a voice-over track, keyed by language code
+ * (e.g. "en", "es") rather than a positional index — a track's identity must
+ * stay stable across repeated {@link IVoiceOverGateway.listVoices} calls.
+ * @public
+ */
+export type VoiceOverTrackId = string & { readonly __brand: "VoiceOverTrackId" };
+
+/**
+ * Branded string identifier for a voice-over source, mirroring
+ * {@link SubtitleSourceId} for symmetry with {@link VoiceOverTrack}.
+ * @public
+ */
+export type VoiceOverSourceId = string & { readonly __brand: "VoiceOverSourceId" };
+
 /** @public Constructs an {@link AudioTrackId} from a raw number. */
 export function asAudioTrackId(value: number): AudioTrackId {
   return value as AudioTrackId;
@@ -34,4 +49,14 @@ export function asSubtitleTrackId(value: number): SubtitleTrackId {
 /** @public Constructs a {@link SubtitleSourceId} from a raw string. */
 export function asSubtitleSourceId(value: string): SubtitleSourceId {
   return value as SubtitleSourceId;
+}
+
+/** @public Constructs a {@link VoiceOverTrackId} from a raw language code. */
+export function asVoiceOverTrackId(value: string): VoiceOverTrackId {
+  return value as VoiceOverTrackId;
+}
+
+/** @public Constructs a {@link VoiceOverSourceId} from a raw string. */
+export function asVoiceOverSourceId(value: string): VoiceOverSourceId {
+  return value as VoiceOverSourceId;
 }

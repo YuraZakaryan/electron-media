@@ -6,11 +6,14 @@ import { SubtitleRegistry } from "../subtitles/subtitle-registry.js";
 import { SubtitleSelectionService } from "../subtitles/subtitle-selection-service.js";
 import { SubtitleDelayProcessor } from "../subtitles/subtitle-delay-processor.js";
 import { TextTrackCueRenderer } from "../subtitles/text-track-cue-renderer.js";
+import { VoiceOverController } from "../voice-over/voice-over-controller.js";
 
 import type { IHlsAdapter } from "../hls/hls-adapter.js";
 import type { PlayerPreferenceStore } from "../contracts/preference-store.js";
 import type { ISubtitleRenderer } from "../subtitles/subtitle-renderer.js";
 import type { ISubtitleSource } from "../subtitles/subtitle-source.js";
+import type { IVoiceOverGateway } from "../voice-over/voice-over-gateway.js";
+import type { VoiceOverControllerOptions } from "../voice-over/voice-over-controller.js";
 
 /** @public */
 export interface MediaPlayerOptions {
@@ -24,6 +27,10 @@ export interface MediaPlayerOptions {
   readonly subtitleSources?: readonly ISubtitleSource[];
   /** Renders projected subtitle cues onto the video. Defaults to {@link TextTrackCueRenderer}. */
   readonly subtitleRenderer?: ISubtitleRenderer;
+  /** TTS gateway for voice-over narration. Omit to disable voice-over entirely. */
+  readonly voiceOverGateway?: IVoiceOverGateway;
+  /** Tunables (duck volume, lookahead, grace window, debounce) for voice-over. Ignored if `voiceOverGateway` is omitted. */
+  readonly voiceOverOptions?: Omit<VoiceOverControllerOptions, "gateway" | "events">;
 }
 
 /**
@@ -47,6 +54,8 @@ export class MediaPlayer {
   readonly audio: AudioTrackController;
   /** Subtitle track listing/selection/delay/rendering. */
   readonly subtitles: SubtitleController;
+  /** Voice-over narration, or `null` when constructed without a `voiceOverGateway`. */
+  readonly voiceOver: VoiceOverController | null;
 
   private readonly video: HTMLVideoElement;
   private readonly hlsController: HlsController;
@@ -80,8 +89,18 @@ export class MediaPlayer {
       this.events.emit("ready", { durationSeconds });
     });
 
+    this.voiceOver = options.voiceOverGateway
+      ? new VoiceOverController({
+          preferenceStore: options.preferenceStore,
+          ...options.voiceOverOptions,
+          gateway: options.voiceOverGateway,
+          events: this.events,
+        })
+      : null;
+
     this.hlsController.attach(this.video);
     this.subtitles.attach(this.video);
+    this.voiceOver?.attach(this.video);
   }
 
   /** Loads (or reloads) a source URL, tearing down any previous HLS instance first. */
@@ -93,6 +112,7 @@ export class MediaPlayer {
   destroy(): void {
     this.hlsController.destroy();
     this.subtitles.destroy();
+    this.voiceOver?.destroy();
     this.events.removeAllListeners();
   }
 }

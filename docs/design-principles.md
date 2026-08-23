@@ -74,6 +74,67 @@ The lesson generalized: a contract earns a place in the public API by
 having an actual implementer inside this repo's own integration work, not
 by being a plausible-sounding extension point.
 
+## v4 — voice-over: one gateway, no registry
+
+Voice-over narration was ported from the reference app's own (untested)
+implementation, following the same class-based, SOLID pattern as subtitles
+— but deliberately **without** a `SubtitleRegistry`/`ISubtitleSource`-style
+split. `SubtitleRegistry` exists because subtitles genuinely have multiple
+heterogeneous sources (embedded HLS, VOD-extracted polling, remote search)
+that need merging and independent lifecycle. Voice-over has exactly one
+kind of source — a TTS gateway producing lines on demand — and the ported
+app code never had more than one engine either. Introducing
+`IVoiceOverSource`/`VoiceOverRegistry` today would be exactly the kind of
+speculative abstraction the "post-launch scope correction" above already
+flagged for removal once: no second implementer, no concrete caller.
+`VoiceOverController` instead mirrors `AudioTrackController`'s shape (one
+controller, one backing abstraction, one selection dimension), composing a
+`VoiceOverCueScheduler` (timing) and `VoiceOverDuckingPlayer` (audio/DOM
+side effects) as private collaborators rather than public extension points.
+If a second concurrent TTS provider ever needs supporting, that's the
+trigger to extract a registry then — not speculatively now.
+
+The port also fixed two things carried over from the untested app code
+without changing behavior a user would notice as a regression: an
+asymmetric duck fade (fade in, snap out — now symmetric except on a hard
+stop) and an autoplay-rejection that was silently swallowed (now surfaced
+as a `voiceOverPlaybackRejected` event, consistent with this library never
+swallowing errors silently elsewhere).
+
+## v4.1 — voice-over follow-ups: preference restore is safe here, unlike subtitles
+
+A round of follow-up improvements added `PlayerPreferenceStore.
+getVoiceOverLanguage`/`setVoiceOverLanguage` (both optional, so no existing
+implementer breaks) and an `AudioTrackController`-style auto-restore latch
+on `VoiceOverController`. This is deliberately **not** the same mistake as
+the removed `getSubtitleLanguage`/`setSubtitleLanguage` pair (see
+"Post-launch scope correction" above): subtitle restore needed
+source-awareness (an embedded track and an OpenSubtitles result in the same
+language aren't the same pick) and an "off" state distinguishable from "no
+preference yet" — neither problem exists for voice-over, which has exactly
+one gateway and one language dimension, identical in shape to audio's own
+restore. The one real difference from audio: voice-over's default absent a
+stored preference is OFF, not "pick something anyway" — audio always needs
+some track selected, narration does not.
+
+The same round added a synthesis concurrency cap and buffering-aware
+scheduling (both in `VoiceOverCueScheduler`, still polling-only — no new
+listeners, for the same video-remount reason the class already avoided
+`pause`/`seeking` listeners), an optional `AbortSignal` on `generateLine`
+alongside the existing best-effort `cancelLine` message, and a pluggable
+`FadeCurve` on `VoiceOverDuckingPlayer` (default unchanged, linear). None of
+these introduced a new abstraction layer — each extends an existing class
+with an additional option or a narrower, single-purpose method, consistent
+with this section's running theme of earning new surface area only when a
+concrete need drives it.
+
+The port also fixed two things carried over from the untested app code
+without changing behavior a user would notice as a regression: an
+asymmetric duck fade (fade in, snap out — now symmetric except on a hard
+stop) and an autoplay-rejection that was silently swallowed (now surfaced
+as a `voiceOverPlaybackRejected` event, consistent with this library never
+swallowing errors silently elsewhere).
+
 ## Deliberately rejected
 
 - **mpv.js instead of `<video>` + hls.js** — would break `<video>`'s DOM/CSS

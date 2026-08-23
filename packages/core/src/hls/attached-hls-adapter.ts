@@ -5,6 +5,7 @@ import { asAudioTrackId, asSubtitleSourceId, asSubtitleTrackId } from "../types/
 import { TrackKind } from "../types/track.js";
 
 import type { AudioTrackId, SubtitleTrackId } from "../types/branding.js";
+import type { CanonicalCue } from "../types/cue.js";
 import type { AudioTrack, SubtitleTrack } from "../types/track.js";
 import type { HlsAdapterEvents, IHlsAdapter } from "./hls-adapter.js";
 import type Hls from "hls.js";
@@ -74,6 +75,7 @@ export class AttachedHlsAdapter implements IHlsAdapter {
   private audioTracks: readonly AudioTrack[] = [];
   private subtitleTracks: readonly SubtitleTrack[] = [];
   private hls: Hls | null = null;
+  private subtitleCueUnsubscribers: Array<() => void> = [];
 
   /**
    * Starts reporting tracks from `hls`. Safe to call again with a new
@@ -96,6 +98,7 @@ export class AttachedHlsAdapter implements IHlsAdapter {
       if (this.hls !== hls) return;
       this.subtitleTracks = data.subtitleTracks.map(mapSubtitleTrack);
       this.emitter.emit("subtitleTracksChanged", { tracks: this.subtitleTracks });
+      this.wireSubtitleCueListeners(hls, data.subtitleTracks);
     });
   }
 
@@ -108,11 +111,79 @@ export class AttachedHlsAdapter implements IHlsAdapter {
     if (!this.hls && this.audioTracks.length === 0 && this.subtitleTracks.length === 0) {
       return;
     }
+    this.clearSubtitleCueListeners();
     this.hls = null;
     this.audioTracks = [];
     this.subtitleTracks = [];
     this.emitter.emit("audioTracksChanged", { tracks: [] });
     this.emitter.emit("subtitleTracksChanged", { tracks: [] });
+  }
+
+  /**
+   * hls.js renders each subtitle rendition onto its own real, native
+   * `TextTrack` (when `renderTextTracksNatively` is on, this app's config)
+   * — cues only ever populate on whichever ONE is currently active
+   * (`hls.subtitleTrack`); an inactive track's `.cues` is `null` per the
+   * TextTrack spec while its mode is `"disabled"`. This is what finally
+   * lets {@link HlsNativeSubtitleSource.onCuesChanged} forward real cue
+   * text — previously it never fired at all, since nothing read the native
+   * TextTrack API. One listener is attached per rendition (harmless for
+   * the disabled ones — cuechange simply never fires while disabled), so
+   * no rewiring is needed when the *active* one changes, only when the
+   * rendition list itself changes.
+   */
+  private wireSubtitleCueListeners(hls: Hls, playlists: readonly MediaPlaylist[]): void {
+    this.clearSubtitleCueListeners();
+
+    const media = hls.media;
+    if (!media) return;
+
+    const candidates: TextTrack[] = [];
+    for (let i = 0; i < media.textTracks.length; i++) {
+      const track = media.textTracks[i];
+      if (track.kind === "subtitles" || track.kind === "captions") {
+        candidates.push(track);
+      }
+    }
+
+    playlists.forEach((playlist, index) => {
+      // Matched by label+language — exactly what hls.js itself passed to
+      // `media.addTextTrack(kind, track.name, track.lang)` when creating
+      // this rendition's native track — falling back to positional index
+      // among subtitle-kind tracks when that match is ambiguous/absent.
+      const label = playlist.name ?? "";
+      const lang = playlist.lang ?? "";
+      const textTrack =
+        candidates.find((track) => track.label === label && track.language === lang) ??
+        candidates[index] ??
+        null;
+      if (!textTrack) return;
+
+      const trackId = asSubtitleTrackId(index);
+      const emitCues = () => {
+        const cueList = textTrack.cues;
+        if (!cueList) return;
+        const cues: CanonicalCue[] = [];
+        for (let i = 0; i < cueList.length; i++) {
+          const cue = cueList[i] as VTTCue;
+          cues.push({ startSeconds: cue.startTime, endSeconds: cue.endTime, text: cue.text });
+        }
+        this.emitter.emit("subtitleCuesChanged", { trackId, cues });
+      };
+
+      textTrack.addEventListener("cuechange", emitCues);
+      this.subtitleCueUnsubscribers.push(() =>
+        textTrack.removeEventListener("cuechange", emitCues)
+      );
+      // Covers a track that's already active with cues loaded by the time
+      // this wiring runs — cuechange only fires on the NEXT change.
+      emitCues();
+    });
+  }
+
+  private clearSubtitleCueListeners(): void {
+    this.subtitleCueUnsubscribers.forEach((unsubscribe) => unsubscribe());
+    this.subtitleCueUnsubscribers = [];
   }
 
   getAudioTracks(): readonly AudioTrack[] {

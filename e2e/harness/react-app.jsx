@@ -31,19 +31,14 @@ function App({ onSetSourceUrl }) {
     ];
   }
 
-  const {
-    audioTracks,
-    selectedAudioTrack,
-    subtitleTracks,
-    selectedSubtitle,
-    selectAudioTrack,
-    selectSubtitleTrack,
-    isLoading,
-    error,
-  } = useMediaPlayer(videoRef, sourceUrl, {
+  const { audio, subtitles, isLoading, error } = useMediaPlayer(videoRef, sourceUrl, {
     hlsAdapter: adapterRef.current,
     subtitleSources: subtitleSourcesRef.current,
   });
+  const { tracks: audioTracks, selectedTrack: selectedAudioTrack } = audio.state;
+  const { select: selectAudioTrack } = audio.actions;
+  const { tracks: subtitleTracks, selectedTrack: selectedSubtitle } = subtitles.state;
+  const { selectTrack: selectSubtitleTrack } = subtitles.actions;
 
   return (
     <div>

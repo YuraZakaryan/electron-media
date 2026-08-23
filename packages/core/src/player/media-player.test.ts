@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { MockHlsAdapter } from "../testing/mock-hls-adapter.js";
+import { MockVoiceOverGateway } from "../testing/mock-voiceover-gateway.js";
+import { ManualVoiceOverTicker } from "../testing/manual-voice-over-ticker.js";
 import { MediaPlayer } from "./media-player.js";
 
 import type { CanonicalCue } from "../types/cue.js";
@@ -146,5 +148,39 @@ describe("MediaPlayer", () => {
     player.destroy();
 
     expect(renderer.clearCalls).toBeGreaterThan(0);
+  });
+
+  it("voiceOver is null when constructed without a voiceOverGateway", () => {
+    const player = new MediaPlayer({
+      video: fakeVideo(),
+      hlsAdapter: new MockHlsAdapter(),
+      subtitleRenderer: stubRenderer(),
+    });
+
+    expect(player.voiceOver).toBeNull();
+  });
+
+  it("voiceOver is non-null when constructed with a voiceOverGateway", () => {
+    const player = new MediaPlayer({
+      video: fakeVideo(),
+      hlsAdapter: new MockHlsAdapter(),
+      subtitleRenderer: stubRenderer(),
+      voiceOverGateway: new MockVoiceOverGateway(),
+      voiceOverOptions: { ticker: new ManualVoiceOverTicker() },
+    });
+
+    expect(player.voiceOver).not.toBeNull();
+  });
+
+  it("destroy() cascades to voiceOver.destroy()", () => {
+    const player = new MediaPlayer({
+      video: fakeVideo(),
+      hlsAdapter: new MockHlsAdapter(),
+      subtitleRenderer: stubRenderer(),
+      voiceOverGateway: new MockVoiceOverGateway(),
+      voiceOverOptions: { ticker: new ManualVoiceOverTicker() },
+    });
+
+    expect(() => player.destroy()).not.toThrow();
   });
 });

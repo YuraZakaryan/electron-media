@@ -218,6 +218,100 @@ describe("SubtitleController", () => {
     expect(renderer.render).toHaveBeenLastCalledWith(fakeVideo, []);
   });
 
+  describe("rendersNatively", () => {
+    it("never calls renderer.render for a rendersNatively source, even once it has cues", () => {
+      const native = new MockSubtitleSource(
+        asSubtitleSourceId("native"),
+        [track(1, "native")],
+        true
+      );
+      const { controller, renderer } = setup([native]);
+      const fakeVideo = {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      } as unknown as HTMLVideoElement;
+      controller.attach(fakeVideo);
+
+      controller.selectTrack(asSubtitleTrackId(1));
+      native.emitCues(asSubtitleTrackId(1), [
+        { startSeconds: 0, endSeconds: 1, text: "hello" },
+      ]);
+
+      // The source paints this cue onto its OWN native TextTrack directly
+      // (that's the whole point of rendersNatively) — render() must never
+      // see it, or the browser would show it twice.
+      expect(renderer.render).not.toHaveBeenCalled();
+    });
+
+    it("clears the renderer when switching from a normal source to a rendersNatively one", () => {
+      const cues: CanonicalCue[] = [
+        { startSeconds: 1, endSeconds: 2, text: "external" },
+      ];
+      const normal = new SyncEmittingSubtitleSource(
+        asSubtitleSourceId("normal"),
+        [track(1, "normal")],
+        cues
+      );
+      const native = new MockSubtitleSource(
+        asSubtitleSourceId("native"),
+        [track(2, "native")],
+        true
+      );
+      const { controller, renderer } = setup([
+        normal as unknown as MockSubtitleSource,
+        native,
+      ]);
+      const fakeVideo = {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      } as unknown as HTMLVideoElement;
+      controller.attach(fakeVideo);
+
+      controller.selectTrack(asSubtitleTrackId(1));
+      expect(renderer.render).toHaveBeenLastCalledWith(fakeVideo, cues);
+
+      controller.selectTrack(asSubtitleTrackId(2));
+      native.emitCues(asSubtitleTrackId(2), [
+        { startSeconds: 0, endSeconds: 1, text: "should never render" },
+      ]);
+
+      expect(renderer.clear).toHaveBeenCalled();
+      // render() was called exactly once — for the FIRST (normal) source —
+      // and never again after switching to the native one.
+      expect(renderer.render).toHaveBeenCalledTimes(1);
+    });
+
+    it("resumes normal rendering when switching from a rendersNatively source back to a normal one", () => {
+      const native = new MockSubtitleSource(
+        asSubtitleSourceId("native"),
+        [track(1, "native")],
+        true
+      );
+      const cues: CanonicalCue[] = [
+        { startSeconds: 1, endSeconds: 2, text: "external" },
+      ];
+      const normal = new SyncEmittingSubtitleSource(
+        asSubtitleSourceId("normal"),
+        [track(2, "normal")],
+        cues
+      );
+      const { controller, renderer } = setup([
+        native,
+        normal as unknown as MockSubtitleSource,
+      ]);
+      const fakeVideo = {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      } as unknown as HTMLVideoElement;
+      controller.attach(fakeVideo);
+
+      controller.selectTrack(asSubtitleTrackId(1));
+      controller.selectTrack(asSubtitleTrackId(2));
+
+      expect(renderer.render).toHaveBeenLastCalledWith(fakeVideo, cues);
+    });
+  });
+
   it("renders exactly once when the newly selected source emits synchronously", () => {
     // Guards the other half of the fix above: re-rendering cues the
     // source's own synchronous emission already rendered would remove and

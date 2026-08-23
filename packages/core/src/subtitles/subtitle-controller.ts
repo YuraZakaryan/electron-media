@@ -197,11 +197,13 @@ export class SubtitleController {
     source?.selectTrack(track.trackId);
     // A source that emits nothing synchronously must still take the screen:
     // canonicalCues was cleared by the caller, so without this the PREVIOUS
-    // track's cues stay rendered until (or forever, if) the new source emits.
-    // Hit by every switch to a still-fetching source, and permanently by one
-    // that never emits at all (HlsNativeSubtitleSource, where hls.js paints
-    // its own TextTrack instead). Skipped when the source already emitted,
-    // since re-rendering identical cues visibly flickers the on-screen cue.
+    // track's cues stay rendered until the new source emits (or, for a
+    // `rendersNatively` source like HlsNativeSubtitleSource, indefinitely —
+    // rerender()'s own check is what actually clears our renderer for that
+    // case, since such a source paints its own TextTrack directly and may
+    // never call back into `canonicalCues` at all). Skipped when the source
+    // already emitted, since re-rendering identical cues visibly flickers
+    // the on-screen cue.
     if (!emittedDuringBind) this.rerender();
     this.syncRepairLoop();
   }
@@ -245,7 +247,16 @@ export class SubtitleController {
   }
 
   private rerender(): void {
-    if (!this.video || !this.selection.selected) {
+    if (
+      !this.video ||
+      !this.selection.selected ||
+      this.subscribedSource?.rendersNatively
+    ) {
+      // For a natively-rendering source (e.g. HlsNativeSubtitleSource), the
+      // source is already painting its own cues directly — rendering the
+      // SAME cues again here would visually duplicate them. Clearing keeps
+      // this renderer's own TextTrack from showing anything stale left over
+      // from a PREVIOUSLY selected, non-native source.
       this.renderer.clear();
       return;
     }

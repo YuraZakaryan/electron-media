@@ -24,3 +24,18 @@ export class SubtitleError extends PlayerError {
   }
 }
 
+/**
+ * Raised when an {@link IVoiceOverGateway} implementation violates its
+ * no-throw contract (`generateLine`/`listVoices` must resolve, never throw
+ * or reject unexpectedly). {@link VoiceOverController} catches the
+ * violation, wraps it here, and emits it via the `voiceOverLineFailed`
+ * event rather than letting it escape as an unhandled rejection.
+ * @public
+ */
+export class VoiceOverError extends PlayerError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "VoiceOverError";
+  }
+}
+

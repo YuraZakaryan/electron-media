@@ -18,6 +18,10 @@
   <ul id="audio-track-list"></ul>
   <div>selected subtitle track id: <span id="selected-subtitle-track-id"></span></div>
   <div id="subtitle-cue-text"></div>
+  <div>voice-over track: <span id="selected-voiceover-track-id"></span></div>
+  <div>voice-over generating: <span id="voiceover-is-generating">false</span></div>
+  <div>voice-over video volume: <span id="voiceover-video-volume"></span></div>
+  <div id="voiceover-event-log"></div>
 
   <script type="module">
     import {
@@ -29,6 +33,89 @@
       asSubtitleTrackId,
       TrackKind,
     } from "/core/index.js";
+
+    const selectedVoiceOverTrackId = document.getElementById("selected-voiceover-track-id");
+    const voiceOverIsGenerating = document.getElementById("voiceover-is-generating");
+    const voiceOverVideoVolume = document.getElementById("voiceover-video-volume");
+    const voiceOverEventLog = document.getElementById("voiceover-event-log");
+
+    function logVoiceOverEvent(entry) {
+      window.__voiceOverLineEvents.push({ ...entry, at: Date.now() });
+      voiceOverEventLog.textContent = window.__voiceOverLineEvents.map((e) => e.type).join(",");
+    }
+
+    // Synthesizes a short silent WAV clip via the Web Audio API, sized to the
+    // requested cue duration — real Audio-element creation/playback/`ended`
+    // events without needing sherpa-onnx or Electron in CI.
+    async function synthesizeSilentWav(durationSeconds) {
+      const sampleRate = 8000;
+      const frameCount = Math.max(1, Math.round(durationSeconds * sampleRate));
+      const ctx = new OfflineAudioContext(1, frameCount, sampleRate);
+      const buffer = ctx.createBuffer(1, frameCount, sampleRate);
+      const bytesPerSample = 2;
+      const blockAlign = bytesPerSample;
+      const byteRate = sampleRate * blockAlign;
+      const dataSize = frameCount * blockAlign;
+      const view = new DataView(new ArrayBuffer(44 + dataSize));
+      const writeString = (offset, str) => {
+        for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+      };
+      writeString(0, "RIFF");
+      view.setUint32(4, 36 + dataSize, true);
+      writeString(8, "WAVE");
+      writeString(12, "fmt ");
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, byteRate, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, 16, true);
+      writeString(36, "data");
+      view.setUint32(40, dataSize, true);
+      // Buffer is already zeroed (silence) by createBuffer(); no per-sample writes needed.
+      void buffer;
+      return URL.createObjectURL(new Blob([view.buffer], { type: "audio/wav" }));
+    }
+
+    // Test double for IVoiceOverGateway: mirrors packages/core's own
+    // MockVoiceOverGateway, but produces real (silent) playable audio and a
+    // window-exposed failure toggle for exercising the bad path end-to-end.
+    class FakeVoiceOverGateway {
+      isAvailable = true;
+      #voices = [
+        { languageCode: "en", displayName: "English" },
+        { languageCode: "es", displayName: "Spanish" },
+      ];
+
+      async listVoices() {
+        return this.#voices;
+      }
+
+      async generateLine(request) {
+        if (window.__voiceOverShouldFail) {
+          return { success: false, error: "forced e2e failure" };
+        }
+        // Forces a line whose synthesized duration exceeds its cue's own
+        // window, to exercise Extended Audio Description (WCAG 1.2.7)
+        // end-to-end without needing a real TTS engine that naturally runs
+        // long.
+        const durationSeconds = window.__voiceOverForceExtendedDuration
+          ? request.targetDurationSeconds + 3
+          : Math.min(Math.max(request.targetDurationSeconds, 0.3), 2);
+        // Capped at 4s (not 2s) so a forced-extended line can still be
+        // genuinely playing once real playback reaches a *later* cue's own
+        // boundary — the multi-cue Extended Audio Description sync test
+        // needs the real audio to still be going at that point, not to
+        // have already finished on its own.
+        const audioUrl = await synthesizeSilentWav(Math.min(durationSeconds, 4));
+        return { success: true, audioUrl, durationSeconds };
+      }
+
+      async cancelLine(request) {
+        window.__voiceOverCancelCalls.push(request);
+      }
+    }
 
     const video = document.getElementById("video");
     const readyState = document.getElementById("ready-state");
@@ -149,17 +236,24 @@
         ],
       });
 
+      const staticSubtitleSource = new StaticSubtitleSource();
       const subtitleSources = [
         new HlsNativeSubtitleSource({ sourceId: asSubtitleSourceId("hls-native"), adapter }),
-        new StaticSubtitleSource(),
+        staticSubtitleSource,
         vodExtractedSource,
       ];
+
+      window.__voiceOverShouldFail = false;
+      window.__voiceOverForceExtendedDuration = false;
+      window.__voiceOverCancelCalls = [];
+      window.__voiceOverLineEvents = [];
 
       const player = new MediaPlayer({
         video,
         hlsAdapter: adapter,
         subtitleSources,
         preferenceStore: new LocalStoragePreferenceStore(),
+        voiceOverGateway: new FakeVoiceOverGateway(),
       });
 
       readyState.textContent = "false";
@@ -195,6 +289,58 @@
       // effect can plausibly run twice, e.g. React StrictMode double-invoke)
       // and doesn't throw the second time.
       window.__destroy = () => player.destroy();
+
+      if (player.voiceOver) {
+        window.__getVoiceOverTracks = () => player.voiceOver.getTracks();
+        window.__selectVoiceOverTrack = (trackId) => player.voiceOver.selectTrack(trackId);
+        // Piggybacks on the SAME StaticSubtitleSource instance already wired
+        // into subtitleSources — its cue window (2s-3s) only starts flowing
+        // once selectTrack() activates it, so the test must first select it
+        // via __selectSubtitleTrack(9999) for visible subtitles, then bind
+        // voice-over onto that already-active source (bindSubtitleSource
+        // itself never calls selectTrack, by design).
+        window.__bindVoiceOverToStaticSubtitleTrack = () =>
+          player.voiceOver.bindSubtitleSource(staticSubtitleSource, STATIC_SUBTITLE_TRACK_ID);
+        // Real multi-cue fixture (cues.vtt: 1s-3s, 3.5s-5.5s, 5.5s-7.5s) —
+        // for tests that need a genuine NEXT cue to sync Extended Audio
+        // Description's freeze against, unlike the single-cue static track.
+        window.__bindVoiceOverToVodExtractedTrack = () =>
+          player.voiceOver.bindSubtitleSource(vodExtractedSource, asSubtitleTrackId(200000));
+        window.__unbindVoiceOverSubtitleTrack = () =>
+          player.voiceOver.bindSubtitleSource(null, null);
+        window.__setVoiceOverShouldFail = (shouldFail) => {
+          window.__voiceOverShouldFail = shouldFail;
+        };
+        // Two independent volume levers for a settings-popover-style UI:
+        // "original sound" (how loud the video itself plays while ducked)
+        // and "voice-over sound" (the narration line's own volume) — neither
+        // derives from or scales the other.
+        window.__setVoiceOverDuckVolume = (volume) => player.voiceOver.setDuckVolume(volume);
+        window.__setVoiceOverVolume = (volume) => player.voiceOver.setVoiceOverVolume(volume);
+        // WCAG 1.2.7 Extended Audio Description: pauses the video instead
+        // of ducking when a line's synthesized duration exceeds its cue's
+        // own window.
+        window.__setVoiceOverAllowVideoPause = (allow) => player.voiceOver.setAllowVideoPause(allow);
+        window.__setVoiceOverForceExtendedDuration = (force) => {
+          window.__voiceOverForceExtendedDuration = force;
+        };
+
+        player.voiceOver.onSelectionChanged((track) => {
+          selectedVoiceOverTrackId.textContent = track ? track.trackId : "";
+        });
+        player.voiceOver.onGeneratingChanged((isGenerating) => {
+          voiceOverIsGenerating.textContent = String(isGenerating);
+        });
+        player.events.on("voiceOverLineFailed", (event) => {
+          logVoiceOverEvent({ type: "failed", trackId: event.trackId });
+        });
+        player.events.on("voiceOverPlaybackRejected", (event) => {
+          logVoiceOverEvent({ type: "rejected", trackId: event.trackId });
+        });
+        setInterval(() => {
+          voiceOverVideoVolume.textContent = String(video.volume);
+        }, 50);
+      }
 
       renderAudioTracks(player);
     }

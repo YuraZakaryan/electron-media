@@ -43,16 +43,34 @@ describe("HlsNativeSubtitleSource", () => {
     expect(listener).toHaveBeenCalledWith(tracks);
   });
 
-  it("onCuesChanged() never fires — hls.js renders its own subtitle tracks directly", () => {
+  it("onCuesChanged() forwards the adapter's subtitleCuesChanged event for the matching trackId", () => {
     const adapter = new MockHlsAdapter();
     const source = new HlsNativeSubtitleSource({ sourceId: SOURCE_ID, adapter });
     const listener = vi.fn();
+    source.onCuesChanged(asSubtitleTrackId(0), listener);
 
+    const cues = [{ startSeconds: 0, endSeconds: 1, text: "hello" }];
+    adapter.emit("subtitleCuesChanged", { trackId: asSubtitleTrackId(0), cues });
+    expect(listener).toHaveBeenCalledWith(cues);
+
+    // A different track's cues must not leak into this subscription.
+    listener.mockClear();
+    adapter.emit("subtitleCuesChanged", { trackId: asSubtitleTrackId(1), cues });
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("onCuesChanged()'s unsubscribe handle stops forwarding further events", () => {
+    const adapter = new MockHlsAdapter();
+    const source = new HlsNativeSubtitleSource({ sourceId: SOURCE_ID, adapter });
+    const listener = vi.fn();
     const unsubscribe = source.onCuesChanged(asSubtitleTrackId(0), listener);
-    // Nothing in this source's contract could ever invoke `listener` — there
-    // is no trigger to simulate; asserting the unsubscribe handle is at
-    // least callable without throwing is the whole of what's checkable here.
-    expect(() => unsubscribe()).not.toThrow();
+
+    unsubscribe();
+    adapter.emit("subtitleCuesChanged", {
+      trackId: asSubtitleTrackId(0),
+      cues: [{ startSeconds: 0, endSeconds: 1, text: "hello" }],
+    });
+
     expect(listener).not.toHaveBeenCalled();
   });
 

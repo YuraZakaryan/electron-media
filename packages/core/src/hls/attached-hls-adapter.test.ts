@@ -16,6 +16,7 @@ import type { MediaPlaylist } from "hls.js";
 class FakeHls {
   audioTrack = -1;
   subtitleTrack = -1;
+  media: FakeMedia | null = null;
   private readonly listeners = new Map<string, Set<(...args: unknown[]) => void>>();
 
   on(event: string, callback: (...args: unknown[]) => void): void {
@@ -30,6 +31,43 @@ class FakeHls {
 
   asHls(): Hls {
     return this as unknown as Hls;
+  }
+}
+
+/** Minimal fake of the DOM `HTMLMediaElement.textTracks` surface. */
+class FakeMedia {
+  textTracks: FakeTextTrack[] = [];
+}
+
+/**
+ * Minimal fake of the DOM `TextTrack` surface — real cue objects (`.cues`)
+ * are `null` while `mode` is `"disabled"`, matching the spec; `setCues`
+ * simulates hls.js populating a native track's cues and firing `cuechange`.
+ */
+class FakeTextTrack {
+  cues: Array<{ startTime: number; endTime: number; text: string }> | null = null;
+  readonly kind: string;
+  readonly label: string;
+  readonly language: string;
+  private readonly listeners = new Set<() => void>();
+
+  constructor(options: { kind?: string; label?: string; language?: string } = {}) {
+    this.kind = options.kind ?? "subtitles";
+    this.label = options.label ?? "";
+    this.language = options.language ?? "";
+  }
+
+  addEventListener(_type: string, callback: () => void): void {
+    this.listeners.add(callback);
+  }
+
+  removeEventListener(_type: string, callback: () => void): void {
+    this.listeners.delete(callback);
+  }
+
+  setCues(cues: Array<{ startTime: number; endTime: number; text: string }>): void {
+    this.cues = cues;
+    this.listeners.forEach((listener) => listener());
   }
 }
 
@@ -124,6 +162,90 @@ describe("AttachedHlsAdapter — good cases", () => {
     secondHls.emit(Events.AUDIO_TRACKS_UPDATED, {}, { audioTracks: [playlist({ lang: "es" }), playlist({ lang: "de" })] });
 
     expect(adapter.getAudioTracks().map((t) => t.language)).toEqual(["es", "de"]);
+  });
+
+  it("forwards a native TextTrack's cues as subtitleCuesChanged, matched by label+language", () => {
+    const adapter = new AttachedHlsAdapter();
+    const hls = new FakeHls();
+    const textTrack = new FakeTextTrack({ label: "English", language: "en" });
+    hls.media = new FakeMedia();
+    hls.media.textTracks = [textTrack];
+    adapter.attachHls(hls.asHls());
+
+    const listener = vi.fn();
+    adapter.on("subtitleCuesChanged", listener);
+    hls.emit(Events.SUBTITLE_TRACKS_UPDATED, {}, {
+      subtitleTracks: [playlist({ name: "English", lang: "en" })],
+    });
+
+    textTrack.setCues([{ startTime: 0, endTime: 1, text: "hello" }]);
+
+    expect(listener).toHaveBeenCalledWith({
+      trackId: 0,
+      cues: [{ startSeconds: 0, endSeconds: 1, text: "hello" }],
+    });
+  });
+
+  it("falls back to positional index when no native TextTrack's label+language matches", () => {
+    const adapter = new AttachedHlsAdapter();
+    const hls = new FakeHls();
+    const textTrack = new FakeTextTrack({ label: "", language: "" }); // e.g. hls.js created it before lang was known
+    hls.media = new FakeMedia();
+    hls.media.textTracks = [textTrack];
+    adapter.attachHls(hls.asHls());
+
+    const listener = vi.fn();
+    adapter.on("subtitleCuesChanged", listener);
+    hls.emit(Events.SUBTITLE_TRACKS_UPDATED, {}, {
+      subtitleTracks: [playlist({ name: "Portuguese", lang: "pt" })],
+    });
+
+    textTrack.setCues([{ startTime: 2, endTime: 3, text: "oi" }]);
+
+    expect(listener).toHaveBeenCalledWith({
+      trackId: 0,
+      cues: [{ startSeconds: 2, endSeconds: 3, text: "oi" }],
+    });
+  });
+
+  it("never forwards a track whose native TextTrack has null cues (mode disabled / inactive)", () => {
+    const adapter = new AttachedHlsAdapter();
+    const hls = new FakeHls();
+    const textTrack = new FakeTextTrack({ label: "English", language: "en" });
+    hls.media = new FakeMedia();
+    hls.media.textTracks = [textTrack];
+    adapter.attachHls(hls.asHls());
+
+    const listener = vi.fn();
+    adapter.on("subtitleCuesChanged", listener);
+    hls.emit(Events.SUBTITLE_TRACKS_UPDATED, {}, {
+      subtitleTracks: [playlist({ name: "English", lang: "en" })],
+    });
+
+    // cuechange fires, but .cues stays null (the track is not the active one).
+    textTrack.cues = null;
+    textTrack.setCues(null as never);
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("stops forwarding a previously-wired TextTrack's cues once detachHls runs", () => {
+    const adapter = new AttachedHlsAdapter();
+    const hls = new FakeHls();
+    const textTrack = new FakeTextTrack({ label: "English", language: "en" });
+    hls.media = new FakeMedia();
+    hls.media.textTracks = [textTrack];
+    adapter.attachHls(hls.asHls());
+    hls.emit(Events.SUBTITLE_TRACKS_UPDATED, {}, {
+      subtitleTracks: [playlist({ name: "English", lang: "en" })],
+    });
+    const listener = vi.fn();
+    adapter.on("subtitleCuesChanged", listener);
+
+    adapter.detachHls();
+    textTrack.setCues([{ startTime: 0, endTime: 1, text: "too late" }]);
+
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it("on() returns an unsubscribe function that stops further callbacks", () => {

@@ -1,4 +1,10 @@
-import type { AudioTrackId, SubtitleSourceId, SubtitleTrackId } from "./branding.js";
+import type {
+  AudioTrackId,
+  SubtitleSourceId,
+  SubtitleTrackId,
+  VoiceOverSourceId,
+  VoiceOverTrackId,
+} from "./branding.js";
 
 /**
  * Classifies the intent of a track. Modeled as an enum rather than a
@@ -39,4 +45,19 @@ export interface SubtitleTrack {
   readonly language?: string;
   readonly kind: TrackKind;
   readonly sourceId: SubtitleSourceId;
+}
+
+/**
+ * A single selectable voice-over (narration/audio-description) track,
+ * exposed by an {@link IVoiceOverGateway}. Unlike {@link SubtitleTrack},
+ * `language` is required — a voice-over track's identity is the language
+ * itself, not an incidental attribute.
+ * @public
+ */
+export interface VoiceOverTrack {
+  readonly trackId: VoiceOverTrackId;
+  readonly displayName: string;
+  readonly language: string;
+  readonly kind: TrackKind;
+  readonly sourceId: VoiceOverSourceId;
 }

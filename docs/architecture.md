@@ -16,14 +16,22 @@ MediaPlayer
 │     └── IHlsAdapter     — HlsJsAdapter (hls.js) is the only implementation
 ├── AudioTrackController  — audio track listing/selection, preference restore
 │     └── IHlsAdapter      (same instance as above — audio tracks come from hls.js)
-└── SubtitleController    — subtitle listing/selection/delay/rendering facade
-      ├── SubtitleRegistry           — merges tracks across N sources
-      │     └── ISubtitleSource[]    — HlsNativeSubtitleSource, VodExtractedSubtitleSource, OpenSubtitlesSource
-      ├── SubtitleSelectionService   — which track is active
-      ├── SubtitleDelayProcessor     — user-facing timing nudge
-      │     └── CueProjector          — pure cue-shift arithmetic
-      └── ISubtitleRenderer          — TextTrackCueRenderer is the only implementation
+├── SubtitleController    — subtitle listing/selection/delay/rendering facade
+│     ├── SubtitleRegistry           — merges tracks across N sources
+│     │     └── ISubtitleSource[]    — HlsNativeSubtitleSource, VodExtractedSubtitleSource, OpenSubtitlesSource
+│     ├── SubtitleSelectionService   — which track is active
+│     ├── SubtitleDelayProcessor     — user-facing timing nudge
+│     │     └── CueProjector          — pure cue-shift arithmetic
+│     └── ISubtitleRenderer          — TextTrackCueRenderer is the only implementation
+└── VoiceOverController   — optional (null unless `voiceOverGateway` is supplied)
+      ├── VoiceOverCueScheduler   — timing state machine (when a line is due)
+      │     └── IVoiceOverGateway  — host-implemented TTS gateway; no shipped implementation
+      └── VoiceOverDuckingPlayer  — Audio element + video-ducking side effects
 ```
+
+`VoiceOverController` has no registry/selection-service split unlike
+`SubtitleController` — see `design-principles.md` for why one gateway-backed
+controller is the right shape here, not four collaborating classes.
 
 ## Why this shape
 
@@ -53,6 +61,11 @@ history behind these choices.
 
 ## What's deliberately NOT in this library
 
+- TTS synthesis itself — `IVoiceOverGateway` is the only voice-over surface
+  the library defines. The actual engine (an on-device model, cloud API,
+  Electron IPC to a main-process synthesizer, WAV caching) is entirely the
+  host application's responsibility, mirroring how `ISubtitleGateway` never
+  makes a network request itself.
 - ffmpeg itself, or any transcode/seek orchestration — this stays entirely
   in the host application, including the HLS instance lifecycle when it's
   tied to a transcode session (see `extension-points.md`).

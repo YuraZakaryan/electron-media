@@ -19,7 +19,8 @@ export class MockSubtitleSource implements ISubtitleSource {
 
   constructor(
     readonly sourceId: SubtitleSourceId,
-    tracks: readonly SubtitleTrack[] = []
+    tracks: readonly SubtitleTrack[] = [],
+    readonly rendersNatively = false
   ) {
     this.tracks = [...tracks];
   }

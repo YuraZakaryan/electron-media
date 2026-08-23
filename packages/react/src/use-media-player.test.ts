@@ -6,12 +6,14 @@ import {
   asAudioTrackId,
   asSubtitleSourceId,
   asSubtitleTrackId,
+  asVoiceOverTrackId,
   HlsNativeSubtitleSource,
   TrackKind,
 } from "@electron-media/core";
 
 import { useMediaPlayer } from "./use-media-player.js";
 import { MockHlsAdapter } from "./testing/mock-hls-adapter.js";
+import { MockVoiceOverGateway } from "./testing/mock-voiceover-gateway.js";
 
 import type { UseMediaPlayerOptions, UseMediaPlayerResult } from "./use-media-player.js";
 
@@ -123,14 +125,14 @@ describe("useMediaPlayer", () => {
       adapter.emit("audioTracksChanged", { tracks });
     });
 
-    expect(harness.result.audioTracks).toEqual(tracks);
+    expect(harness.result.audio.state.tracks).toEqual(tracks);
     // AudioTrackController auto-selects the "default" track on first list update.
-    expect(harness.result.selectedAudioTrack).toEqual(tracks[0]);
+    expect(harness.result.audio.state.selectedTrack).toEqual(tracks[0]);
 
-    act(() => harness.result.selectAudioTrack(asAudioTrackId(1)));
+    act(() => harness.result.audio.actions.select(asAudioTrackId(1)));
 
     expect(adapter.selectedAudioTrackId).toBe(1);
-    expect(harness.result.selectedAudioTrack).toEqual(tracks[1]);
+    expect(harness.result.audio.state.selectedTrack).toEqual(tracks[1]);
   });
 
   it("reflects subtitle tracks and proxies selectSubtitleTrack/setSubtitleDelay", () => {
@@ -156,15 +158,17 @@ describe("useMediaPlayer", () => {
       adapter.emit("subtitleTracksChanged", { tracks });
     });
 
-    expect(harness.result.subtitleTracks).toEqual(tracks);
-    expect(harness.result.selectedSubtitle).toBeNull();
+    expect(harness.result.subtitles.state.tracks).toEqual(tracks);
+    expect(harness.result.subtitles.state.selectedTrack).toBeNull();
 
-    act(() => harness.result.selectSubtitleTrack(asSubtitleTrackId(0)));
+    act(() => harness.result.subtitles.actions.selectTrack(asSubtitleTrackId(0)));
     expect(adapter.selectedSubtitleTrackId).toBe(0);
 
-    // setSubtitleDelay must not throw even with no track selected on a
+    // setDelaySeconds must not throw even with no track selected on a
     // fresh SubtitleController — proxying is a plain passthrough call.
-    expect(() => act(() => harness.result.setSubtitleDelay(2))).not.toThrow();
+    expect(() =>
+      act(() => harness.result.subtitles.actions.setDelaySeconds(2))
+    ).not.toThrow();
   });
 
   it("isLoading is true immediately after loadSource and false once the adapter reports the manifest parsed", () => {
@@ -189,5 +193,96 @@ describe("useMediaPlayer", () => {
     harness.rerenderWith("https://example.com/b.m3u8");
 
     expect(harness.result.error).toBeNull();
+  });
+
+  it("voiceOver.state.tracks is empty and voiceOver.actions calls are harmless no-ops when voiceOverGateway is omitted", () => {
+    const adapter = new MockHlsAdapter();
+    const harness = setup("https://example.com/master.m3u8", { hlsAdapter: adapter });
+
+    expect(harness.result.voiceOver.state.tracks).toEqual([]);
+    expect(harness.result.voiceOver.state.selectedTrack).toBeNull();
+    expect(() =>
+      act(() => harness.result.voiceOver.actions.selectTrack(asVoiceOverTrackId("en")))
+    ).not.toThrow();
+    expect(() => act(() => harness.result.voiceOver.actions.disableVoiceOver())).not.toThrow();
+    expect(() =>
+      act(() => harness.result.voiceOver.actions.bindSubtitleSource(null, null))
+    ).not.toThrow();
+  });
+
+  it("populates voiceOver.state.tracks from the gateway once voiceOverGateway is provided", async () => {
+    const adapter = new MockHlsAdapter();
+    const gateway = new MockVoiceOverGateway();
+    gateway.voices = [{ languageCode: "en", displayName: "English" }];
+    const harness = setup("https://example.com/master.m3u8", {
+      hlsAdapter: adapter,
+      voiceOverGateway: gateway,
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(harness.result.voiceOver.state.tracks).toEqual([
+      { trackId: asVoiceOverTrackId("en"), displayName: "English", language: "en", kind: "dub", sourceId: expect.any(String) },
+    ]);
+  });
+
+  it("voiceOver.actions.selectTrack forwards to the underlying controller", async () => {
+    const adapter = new MockHlsAdapter();
+    const gateway = new MockVoiceOverGateway();
+    gateway.voices = [{ languageCode: "en", displayName: "English" }];
+    const harness = setup("https://example.com/master.m3u8", {
+      hlsAdapter: adapter,
+      voiceOverGateway: gateway,
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    act(() => harness.result.voiceOver.actions.selectTrack(asVoiceOverTrackId("en")));
+    expect(harness.result.voiceOver.state.selectedTrack?.language).toBe("en");
+
+    act(() => harness.result.voiceOver.actions.disableVoiceOver());
+    expect(harness.result.voiceOver.state.selectedTrack).toBeNull();
+  });
+
+  it("voiceOver.state.isGenerating starts false and unmount does not throw with voice-over enabled", async () => {
+    const adapter = new MockHlsAdapter();
+    const gateway = new MockVoiceOverGateway();
+    const harness = setup("https://example.com/master.m3u8", {
+      hlsAdapter: adapter,
+      voiceOverGateway: gateway,
+    });
+
+    expect(harness.result.voiceOver.state.isGenerating).toBe(false);
+    expect(() => harness.unmount()).not.toThrow();
+  });
+
+  it("setDuckVolume/setVoiceOverVolume/setLookaheadSeconds proxy through and no-op safely without voiceOverGateway", () => {
+    const adapter = new MockHlsAdapter();
+    const harness = setup("https://example.com/master.m3u8", { hlsAdapter: adapter });
+
+    expect(() => act(() => harness.result.voiceOver.actions.setDuckVolume(0.5))).not.toThrow();
+    expect(() => act(() => harness.result.voiceOver.actions.setVoiceOverVolume(0.8))).not.toThrow();
+    expect(() => act(() => harness.result.voiceOver.actions.setLookaheadSeconds(3))).not.toThrow();
+  });
+
+  it("setDuckVolume/setVoiceOverVolume/setLookaheadSeconds forward to the underlying controller when voiceOverGateway is provided", async () => {
+    const adapter = new MockHlsAdapter();
+    const gateway = new MockVoiceOverGateway();
+    const harness = setup("https://example.com/master.m3u8", {
+      hlsAdapter: adapter,
+      voiceOverGateway: gateway,
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(() => act(() => harness.result.voiceOver.actions.setDuckVolume(0.5))).not.toThrow();
+    expect(() => act(() => harness.result.voiceOver.actions.setVoiceOverVolume(0.8))).not.toThrow();
+    expect(() => act(() => harness.result.voiceOver.actions.setLookaheadSeconds(3))).not.toThrow();
   });
 });

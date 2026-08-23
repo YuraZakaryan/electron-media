@@ -1,10 +1,23 @@
 import type { AudioTrackId, SubtitleTrackId } from "../types/branding.js";
+import type { CanonicalCue } from "../types/cue.js";
 import type { AudioTrack, SubtitleTrack } from "../types/track.js";
 
 /** @public Events emitted by an {@link IHlsAdapter}. */
 export interface HlsAdapterEvents extends Record<string, unknown> {
   audioTracksChanged: { readonly tracks: readonly AudioTrack[] };
   subtitleTracksChanged: { readonly tracks: readonly SubtitleTrack[] };
+  /**
+   * Fired with the full, canonical cue list for `trackId` whenever the
+   * underlying engine's native rendering of that track gains/changes cues.
+   * Optional to implement — an adapter that never emits this (e.g. one
+   * whose engine doesn't render subtitles natively at all) simply means
+   * {@link HlsNativeSubtitleSource.onCuesChanged} has nothing to forward,
+   * which was this whole feature's prior behavior.
+   */
+  subtitleCuesChanged: {
+    readonly trackId: SubtitleTrackId;
+    readonly cues: readonly CanonicalCue[];
+  };
   fatalError: { readonly code: string; readonly cause?: unknown };
   /** Fired once the manifest has been parsed and playback can begin. */
   manifestParsed: { readonly durationSeconds: number };

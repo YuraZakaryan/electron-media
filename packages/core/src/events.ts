@@ -54,10 +54,76 @@ export interface PlayerReadyEvent {
 }
 
 /**
+ * Payload for the `voiceOverLineFailed` event — a voice-over line could not
+ * be synthesized, either because the gateway reported failure or because it
+ * violated its no-throw contract (in which case `error` is a
+ * {@link VoiceOverError}).
+ * @public
+ */
+export interface VoiceOverLineFailedEvent {
+  readonly trackId: import("./types/branding.js").VoiceOverTrackId;
+  readonly error: string | import("./errors/player-error.js").VoiceOverError;
+}
+
+/**
+ * Payload for the `voiceOverPlaybackRejected` event — the browser's
+ * autoplay policy rejected playing a synthesized voice-over line. Surfaced
+ * explicitly rather than swallowed, so a host application can react (e.g.
+ * prompt the user to interact) instead of voice-over silently doing nothing.
+ * @public
+ */
+export interface VoiceOverPlaybackRejectedEvent {
+  readonly trackId: import("./types/branding.js").VoiceOverTrackId;
+}
+
+/**
+ * Payload for the `voiceOverVideoResumeRejected` event — resuming the
+ * video after an Extended Audio Description pause (WCAG 1.2.7) was
+ * rejected. Surfaced explicitly rather than swallowed, consistent with
+ * `voiceOverPlaybackRejected` — a host can react (e.g. show a "tap to
+ * resume" prompt) instead of the video silently staying paused.
+ * @public
+ */
+export interface VoiceOverVideoResumeRejectedEvent {
+  readonly trackId: import("./types/branding.js").VoiceOverTrackId;
+}
+
+/**
+ * Payload for the `voiceOverLinePlayed` event — a synthesized line started
+ * playing. `clipped` mirrors {@link VoiceOverLineResult}'s `clipped`, when
+ * the gateway set it.
+ * @public
+ */
+export interface VoiceOverLinePlayedEvent {
+  readonly trackId: import("./types/branding.js").VoiceOverTrackId;
+  readonly cueKey: string;
+  readonly clipped?: boolean;
+  /** `true` when this line didn't fit its cue's window (WCAG 1.2.7 Extended Audio Description case) — whether the video was actually paused for it depends on the host's `allowVideoPause` setting. */
+  readonly isExtended?: boolean;
+}
+
+/**
+ * Payload for the `voiceOverLineSkipped` event — a cue was skipped for a
+ * scheduling reason (non-dialogue, missed its late-start grace window, or
+ * dropped by a seek). Never fired for a gateway failure or unexpected
+ * throw — those are exclusively `voiceOverLineFailed`.
+ * @public
+ */
+export interface VoiceOverLineSkippedEvent {
+  readonly trackId: import("./types/branding.js").VoiceOverTrackId;
+  readonly cueKey: string;
+}
+
+/**
  * Events emitted by {@link MediaPlayer}.
  * @public
  */
 export interface PlayerEvents extends Record<string, unknown> {
   error: PlayerErrorEvent;
   ready: PlayerReadyEvent;
+  voiceOverLineFailed: VoiceOverLineFailedEvent;
+  voiceOverPlaybackRejected: VoiceOverPlaybackRejectedEvent;
+  voiceOverVideoResumeRejected: VoiceOverVideoResumeRejectedEvent;
+  voiceOverLinePlayed: VoiceOverLinePlayedEvent;
+  voiceOverLineSkipped: VoiceOverLineSkippedEvent;
 }
