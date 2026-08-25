@@ -39,6 +39,13 @@ jobs:
 
       - run: pnpm lint
       - run: pnpm typecheck
+      # packages/react's tests import @electron-media/core as a real
+      # package (dist/index.js, per its "exports" field) rather than
+      # aliasing to source — without a build first, a fresh checkout has
+      # no dist/ yet and vite's resolver fails with "Failed to resolve
+      # entry for package". ci.yml already builds before testing; this
+      # job needs the same order.
+      - run: pnpm build
       - run: pnpm test
 
       # If there are pending .changeset/*.md files, this opens/updates a
