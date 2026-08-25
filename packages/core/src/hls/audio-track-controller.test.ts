@@ -25,8 +25,6 @@ function makePreferenceStore(
   return {
     getAudioLanguage: vi.fn(() => storedAudioLanguage),
     setAudioLanguage: vi.fn(),
-    getSubtitleLanguage: vi.fn(() => null),
-    setSubtitleLanguage: vi.fn(),
   };
 }
 

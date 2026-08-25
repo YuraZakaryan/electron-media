@@ -1,8 +1,10 @@
 import { test, expect } from "@playwright/test";
 
+import type { Page } from "@playwright/test";
+
 const FIXTURE_URL = "/fixtures/master.m3u8";
 
-async function bindAndSelectEnglish(page: import("@playwright/test").Page) {
+async function bindAndSelectEnglish(page: Page) {
   // bindSubtitleSource is debounced (300ms) before it actually subscribes;
   // StaticSubtitleSource only pushes its cue to whichever listeners are
   // registered AT THE MOMENT selectTrack() runs, so the voice-over

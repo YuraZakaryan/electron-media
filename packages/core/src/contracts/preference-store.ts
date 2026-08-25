@@ -21,12 +21,18 @@
  * against {@link SubtitleController.getTracks}, the way this library's own
  * reference integration does. Voice-over's own default, unlike audio's, is
  * OFF — no stored preference means narration stays disabled, not "pick
- * something anyway".
+ * something anyway". Unlike audio (which can never be turned off, so its
+ * `setAudioLanguage` never needs to express "no preference"),
+ * `setVoiceOverLanguage` accepts `null` for exactly that: an explicit
+ * {@link VoiceOverController.selectTrack}`(null)` clears the stored
+ * preference, so a user who deliberately turns narration off doesn't have
+ * it silently turn back on from a stale stored language on the next
+ * restore.
  * @public
  */
 export interface PlayerPreferenceStore {
   getAudioLanguage(): string | null;
   setAudioLanguage(language: string): void;
   getVoiceOverLanguage?(): string | null;
-  setVoiceOverLanguage?(language: string): void;
+  setVoiceOverLanguage?(language: string | null): void;
 }

@@ -1,5 +1,5 @@
 import type { AudioTrackId } from "../types/branding.js";
-import type { AudioTrack } from "../types/track.js";
+import { TrackKind, type AudioTrack } from "../types/track.js";
 import type { IHlsAdapter } from "./hls-adapter.js";
 import type { PlayerPreferenceStore } from "../contracts/preference-store.js";
 
@@ -96,7 +96,7 @@ export class AudioTrackController {
     const storedLanguage = this.preferenceStore?.getAudioLanguage();
     return (
       (storedLanguage && tracks.find((track) => track.language === storedLanguage)) ||
-      tracks.find((track) => track.kind === "default") ||
+      tracks.find((track) => track.kind === TrackKind.Default) ||
       tracks[0]
     );
   }

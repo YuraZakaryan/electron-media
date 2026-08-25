@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  # A release in flight must not be cancelled mid-publish.
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  # Required for npm Trusted Publishing (OIDC) — this repo is public, so no
+  # long-lived NPM_TOKEN secret is needed. One-time manual setup required:
+  # on npmjs.com, for both @electron-media/core and @electron-media/react,
+  # set this repository + this workflow file as a Trusted Publisher.
+  # Publish fails until that's done — it cannot be done from inside a workflow.
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # OIDC trusted publishing needs a recent npm; Node 22 ships one.
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+
+      # If there are pending .changeset/*.md files, this opens/updates a
+      # "Version Packages" PR instead of publishing. Publishing only
+      # happens on a later run, once that PR is merged and no changesets
+      # remain — see changesets/action's own docs for this two-step flow.
+      - name: Create Version PR or publish to npm
+        uses: changesets/action@v1
+        with:
+          version: pnpm changeset:version
+          publish: pnpm changeset:publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

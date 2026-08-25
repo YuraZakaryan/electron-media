@@ -196,12 +196,12 @@ export class AttachedHlsAdapter implements IHlsAdapter {
 
   setAudioTrack(trackId: AudioTrackId): void {
     if (!this.hls) return;
-    this.hls.audioTrack = trackId as unknown as number;
+    this.hls.audioTrack = trackId;
   }
 
   setSubtitleTrack(trackId: SubtitleTrackId | null): void {
     if (!this.hls) return;
-    this.hls.subtitleTrack = trackId === null ? NO_TRACK_INDEX : (trackId as unknown as number);
+    this.hls.subtitleTrack = trackId === null ? NO_TRACK_INDEX : (trackId);
   }
 
   on<TEventName extends keyof HlsAdapterEvents>(

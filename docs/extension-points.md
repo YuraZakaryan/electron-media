@@ -22,8 +22,15 @@ than the `MediaPlayer` facade if you need post-construction registration —
 to keep its own surface narrow).
 
 Existing sources to use as reference:
-- `HlsNativeSubtitleSource` — delegates entirely to `IHlsAdapter`; never emits
-  cues (hls.js renders its own tracks).
+- `HlsNativeSubtitleSource` — delegates entirely to `IHlsAdapter`; forwards
+  whatever cue text the adapter reads back off hls.js's own native
+  `TextTrack` (see `AttachedHlsAdapter`'s `subtitleCuesChanged` event) —
+  cue text itself is not the limitation. The real constraint is
+  `selectTrack`: it maps straight to the adapter's single
+  `hls.subtitleTrack`, the one slot hls.js uses to decide which rendition
+  is visibly showing, shared with whatever else (e.g. `SubtitleController`)
+  also calls it on the same adapter instance. Activating a different
+  rendition here — for narration only — visibly changes what's on screen.
 - `VodExtractedSubtitleSource` — polls a growing `.vtt` file.
 - `OpenSubtitlesSource` — one-shot search + download via `ISubtitleGateway`.
 
@@ -83,13 +90,18 @@ function pickNarrationTrack(
   visiblySelected: SubtitleTrack | null,
   isStillLoading: (track: SubtitleTrack) => boolean,
 ): SubtitleTrack | null {
-  // Never narrate off an HlsNativeSubtitleSource-backed track: that source
-  // never emits onCuesChanged (hls.js renders its own hidden TextTrack), so
-  // VoiceOverController's bindSubtitleSource would just sit there with no
-  // cues — and if it somehow did have cues, selecting it for narration must
-  // never have the side effect of visibly turning subtitles on, which is
-  // exactly the guarantee bindSubtitleSource itself provides.
-  const isNarratable = (t: SubtitleTrack) => t.sourceId !== "hls-native";
+  // An HlsNativeSubtitleSource-backed track's cue text forwards fine, but
+  // its selectTrack() is the same call that makes hls.js visibly activate
+  // that rendition on screen (see this source's own doc comment) — there
+  // is no way to read its cues without also showing it. Narrating a
+  // different hls-native track than the one currently visible would
+  // silently hijack the visible subtitle too, breaking the guarantee
+  // bindSubtitleSource otherwise provides for every other source type. The
+  // safe policy is to only ever narrate an hls-native track when it's
+  // already the one visibly selected — never let an auto-pick activate one
+  // on its own.
+  const isNarratable = (t: SubtitleTrack) =>
+    t.sourceId !== "hls-native" || t.trackId === visiblySelected?.trackId;
 
   if (visiblySelected && isNarratable(visiblySelected)) return visiblySelected;
 
@@ -109,12 +121,51 @@ This is application policy, not library code — deliberately, per the
 `design-principles.md` decision to keep `VoiceOverController` itself
 narrow.
 
+### Recipe: silencing narration on host-side cleanup without erasing the user's choice
+
+`selectTrack(null)` and `stop()` both immediately silence any currently
+playing line, but they mean different things — using the wrong one for
+cleanup is an easy trap:
+
+- `selectTrack(null)` is the user's own explicit "off" — it persists via
+  `PlayerPreferenceStore.setVoiceOverLanguage(null)`, exactly as durably as
+  picking a language does.
+- `stop()` is a non-destructive hard-stop for a host that's tearing
+  something down (closing the current title, detaching the player) while
+  a line happens to be mid-narration. It doesn't touch the selected track
+  or persisted preference at all.
+
+Calling `selectTrack(null)` from a "close the title" handler looks
+harmless — narration does go silent — but it also erases the user's
+language choice, so the *next* title opens with voice-over off even
+though the user never asked for that:
+
+```ts
+function onCloseTitle() {
+  // Wrong: also persists "off", so the next title silently loses the
+  // user's chosen narration language.
+  player.voiceOver?.selectTrack(null);
+
+  // Right: silences narration now; the same language auto-restores
+  // the next time a bindSubtitleSource-backed track is available.
+  player.voiceOver?.stop();
+}
+```
+
+The distinction matters specifically because the underlying `<video>`
+element commonly persists across titles (only its `src` changes) — a
+title closed mid-line without *some* hard-stop leaves the video's volume
+stuck at the ducked level, which the next title's own volume-capture would
+then misread as "normal."
+
 ## Substitute a different HLS engine (or a test double)
 
 Implement `IHlsAdapter` (`packages/core/src/hls/hls-adapter.ts`).
-`HlsJsAdapter` is the only shipped implementation; a unit test for
-`AudioTrackController` or `HlsController` should use a hand-written mock
-adapter instead of a real `hls.js` instance.
+Two implementations ship: `HlsJsAdapter` (owns the `Hls` instance
+end-to-end) and `AttachedHlsAdapter` (wraps an `Hls` instance the *host*
+creates/destroys — see the transcoding/seek section below, which is exactly
+what it's for). A unit test for `AudioTrackController` or `HlsController`
+should use a hand-written mock adapter instead of a real `hls.js` instance.
 
 ## Persist preferences somewhere other than the default
 
@@ -138,9 +189,14 @@ policy the library has no useful generic shape for.
 
 If your app's HLS lifecycle is itself owned by a transcode/seek session
 (rather than a plain HLS URL), don't route it through `HlsController`/
-`HlsJsAdapter` at all — write a thin `IHlsAdapter` that wraps the `Hls`
-instance *you* create and destroy, and use `AudioTrackController`/
-`SubtitleController` against it. See `media-player-core`'s own reference
-integration for exactly this pattern: the consuming app's VOD player keeps
-full ownership of `Hls` creation, retry policy, and transcode-session
-teardown, and only hands the library a thin adapter over it.
+`HlsJsAdapter` at all — use `AttachedHlsAdapter` (`packages/core/src/hls/attached-hls-adapter.ts`),
+which wraps the `Hls` instance *you* create and destroy, and construct
+`AudioTrackController`/`SubtitleController` against it directly (rather
+than via `MediaPlayer`, which owns its `Hls` instance end-to-end). Call
+`attachedAdapter.attachHls(hls)` whenever your app (re)creates its own `Hls`
+instance and `detachHls()` whenever it tears one down — both are safe to
+call redundantly and across many attach/detach cycles, e.g. a VOD seek that
+destroys and recreates the stream mid-session. A reference implementation
+of exactly this pattern keeps full ownership of `Hls` creation, retry
+policy, and transcode-session teardown in the app, and only hands
+`@electron-media/core` the thin adapter over it.

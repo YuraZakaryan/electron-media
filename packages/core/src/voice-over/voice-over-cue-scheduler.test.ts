@@ -239,6 +239,103 @@ describe("VoiceOverCueScheduler", () => {
     expect(ready).not.toHaveBeenCalled();
   });
 
+  describe("invalidateStaleCues (discarding an already-Ready line on setLanguageCode)", () => {
+    it("does not play a pre-fetched Ready line once its cue becomes due after turning off mid-narration", async () => {
+      gateway.lineResultByKey.set("en:first", { success: true, audioUrl: "blob:1", durationSeconds: 2 });
+      gateway.lineResultByKey.set("en:second", { success: true, audioUrl: "blob:2", durationSeconds: 2 });
+      const ready = vi.fn();
+      scheduler.onLineReady(ready);
+      // "second" starts at 3s, well within the 6s lookahead from t=0, so it
+      // gets synthesized concurrently with "first" and sits Ready long
+      // before its own cue is due — exactly the lookahead pre-fetch that
+      // exposes the bug.
+      scheduler.setCues([cue(0, 2, "first"), cue(3, 5, "second")]);
+      setCurrentTime(0);
+      ticker.tick(); // both -> Pending, generateLine called for both
+      await flushMicrotasks();
+      ticker.tick(); // "first" -> Playing; "second" -> Ready (not yet due)
+      expect(ready).toHaveBeenCalledTimes(1);
+      expect(ready).toHaveBeenCalledWith(expect.objectContaining({ cueKey: expect.stringContaining("first") }));
+
+      // User turns voice-over off while "first" is still narrating.
+      scheduler.setLanguageCode(null);
+
+      // Advance to when "second"'s cue becomes due. Before the fix,
+      // startNextDueLine had no language guard and would still hand off
+      // this pre-fetched Ready line here — narration audibly resuming a
+      // few seconds after being turned off.
+      setCurrentTime(3);
+      ticker.tick();
+      await flushMicrotasks();
+
+      expect(ready).toHaveBeenCalledTimes(1); // still only "first" — never "second"
+    });
+
+    it("marks a discarded Ready line Skipped and fires onLineSkipped", async () => {
+      gateway.lineResultByKey.set("en:first", { success: true, audioUrl: "blob:1", durationSeconds: 2 });
+      gateway.lineResultByKey.set("en:second", { success: true, audioUrl: "blob:2", durationSeconds: 2 });
+      const skipped = vi.fn();
+      scheduler.onLineSkipped(skipped);
+      scheduler.setCues([cue(0, 2, "first"), cue(3, 5, "second")]);
+      setCurrentTime(0);
+      ticker.tick();
+      await flushMicrotasks();
+      ticker.tick(); // "second" now Ready, not yet due
+
+      scheduler.setLanguageCode(null);
+
+      expect(skipped).toHaveBeenCalledWith(expect.stringContaining("second"));
+    });
+
+    it("does not resurrect a Ready line synthesized under the previous language after switching to a new one", async () => {
+      gateway.lineResultByKey.set("en:first", { success: true, audioUrl: "blob:1", durationSeconds: 2 });
+      gateway.lineResultByKey.set("en:second", { success: true, audioUrl: "blob:2", durationSeconds: 2 });
+      const ready = vi.fn();
+      scheduler.onLineReady(ready);
+      scheduler.setCues([cue(0, 2, "first"), cue(3, 5, "second")]);
+      setCurrentTime(0);
+      ticker.tick();
+      await flushMicrotasks();
+      ticker.tick(); // "first" Playing (en), "second" Ready (en)
+
+      scheduler.setLanguageCode("es"); // switch language mid-narration
+
+      setCurrentTime(3);
+      ticker.tick();
+      await flushMicrotasks();
+
+      // "second" was synthesized in "en" and must not play just because its
+      // cue became due — even though a language is now selected again.
+      expect(ready).toHaveBeenCalledTimes(1);
+      expect(ready).not.toHaveBeenCalledWith(
+        expect.objectContaining({ cueKey: expect.stringContaining("second") })
+      );
+    });
+
+    it("best-effort cancels a still-Pending line's synthesis when turning off", async () => {
+      gateway.lineResultByKey.set("en:first", { success: true, audioUrl: "blob:1", durationSeconds: 2 });
+      scheduler.setCues([cue(0, 2, "first")]);
+      setCurrentTime(0);
+      ticker.tick(); // -> Pending, generateLine in flight
+
+      scheduler.setLanguageCode(null);
+
+      expect(gateway.cancelLineCalls).toContainEqual({ languageCode: "en", text: "first" });
+    });
+
+    it("stops isGenerating from staying stuck true after turning off mid-synthesis", async () => {
+      gateway.generateLine = () => new Promise(() => {}); // never resolves
+      scheduler.setCues([cue(0, 2, "first")]);
+      setCurrentTime(0);
+      ticker.tick(); // -> Pending
+      expect(scheduler.isGenerating).toBe(true);
+
+      scheduler.setLanguageCode(null);
+
+      expect(scheduler.isGenerating).toBe(false);
+    });
+  });
+
   it("plays only the nearest due cue after a forward seek skips past several", async () => {
     gateway.lineResultByKey.set("en:c1", { success: true, audioUrl: "blob:1", durationSeconds: 1 });
     gateway.lineResultByKey.set("en:c2", { success: true, audioUrl: "blob:2", durationSeconds: 1 });
@@ -582,6 +679,45 @@ describe("VoiceOverCueScheduler", () => {
       setCurrentTime(3);
       ticker.tick();
       expect(ready).toHaveBeenCalledTimes(1); // due at 5-2=3, not the canonical 5
+    });
+  });
+
+  describe("narrationRate", () => {
+    it("defaults to requesting the cue's own window unmodified", () => {
+      scheduler.setCues([cue(2, 5)]); // 3s window
+      ticker.tick();
+      expect(gateway.generateLineCalls).toHaveLength(1);
+      expect(gateway.generateLineCalls[0].targetDurationSeconds).toBe(3);
+    });
+
+    it("a rate above 1 (constructor option) requests a shorter targetDurationSeconds", () => {
+      const fastScheduler = new VoiceOverCueScheduler({
+        gateway,
+        ticker,
+        narrationRate: 1.5,
+      });
+      fastScheduler.attach(video);
+      fastScheduler.setLanguageCode("en");
+      fastScheduler.setCues([cue(2, 5)]); // 3s window / 1.5 = 2s
+      ticker.tick();
+      expect(gateway.generateLineCalls).toHaveLength(1);
+      expect(gateway.generateLineCalls[0].targetDurationSeconds).toBeCloseTo(2);
+    });
+
+    it("setNarrationRate updates the rate applied to the next generateLine call", () => {
+      scheduler.setNarrationRate(2);
+      scheduler.setCues([cue(2, 6)]); // 4s window / 2 = 2s
+      ticker.tick();
+      expect(gateway.generateLineCalls).toHaveLength(1);
+      expect(gateway.generateLineCalls[0].targetDurationSeconds).toBeCloseTo(2);
+    });
+
+    it("a rate below 1 requests a longer targetDurationSeconds", () => {
+      scheduler.setNarrationRate(0.5);
+      scheduler.setCues([cue(2, 4)]); // 2s window / 0.5 = 4s
+      ticker.tick();
+      expect(gateway.generateLineCalls).toHaveLength(1);
+      expect(gateway.generateLineCalls[0].targetDurationSeconds).toBeCloseTo(4);
     });
   });
 

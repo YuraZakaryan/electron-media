@@ -13,7 +13,7 @@ independent subsystems behind one facade:
 ```
 MediaPlayer
 ├── HlsController        — HLS lifecycle only (attach/loadSource/destroy)
-│     └── IHlsAdapter     — HlsJsAdapter (hls.js) is the only implementation
+│     └── IHlsAdapter     — HlsJsAdapter (owns hls.js end-to-end) or AttachedHlsAdapter (wraps a host-owned Hls)
 ├── AudioTrackController  — audio track listing/selection, preference restore
 │     └── IHlsAdapter      (same instance as above — audio tracks come from hls.js)
 ├── SubtitleController    — subtitle listing/selection/delay/rendering facade

@@ -201,12 +201,12 @@ export class HlsJsAdapter implements IHlsAdapter {
 
   setAudioTrack(trackId: AudioTrackId): void {
     if (!this.hls) return;
-    this.hls.audioTrack = trackId as unknown as number;
+    this.hls.audioTrack = trackId;
   }
 
   setSubtitleTrack(trackId: SubtitleTrackId | null): void {
     if (!this.hls) return;
-    this.hls.subtitleTrack = trackId === null ? NO_TRACK_INDEX : (trackId as unknown as number);
+    this.hls.subtitleTrack = trackId === null ? NO_TRACK_INDEX : (trackId);
   }
 
   on<TEventName extends keyof HlsAdapterEvents>(
@@ -245,9 +245,9 @@ class EventTargetShim<TEvents extends Record<string, unknown>> {
 
   on<K extends keyof TEvents>(eventName: K, callback: (payload: TEvents[K]) => void): () => void {
     const set = this.listeners.get(eventName) ?? new Set();
-    set.add(callback as (payload: never) => void);
+    set.add(callback);
     this.listeners.set(eventName, set);
-    return () => set.delete(callback as (payload: never) => void);
+    return () => set.delete(callback);
   }
 
   emit<K extends keyof TEvents>(eventName: K, payload: TEvents[K]): void {

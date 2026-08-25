@@ -52,13 +52,13 @@ import { HlsJsAdapter } from "@electron-media/core";
 
 function Player({ src }: { src: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { audioTracks, subtitleTracks, selectedSubtitle, selectAudioTrack,
-          selectSubtitleTrack, setSubtitleDelay, isLoading, error,
-          voiceOverTracks, selectedVoiceOver, isGeneratingVoiceOver,
-          selectVoiceOverTrack, disableVoiceOver, bindVoiceOverSubtitleSource,
-          setVoiceOverDuckVolume, setVoiceOverVolume, setVoiceOverLookaheadSeconds,
-          setVoiceOverAllowVideoPause } =
+  const { audio, subtitles, voiceOver, isLoading, error } =
     useMediaPlayer(videoRef, src, { hlsAdapter: new HlsJsAdapter() });
+
+  // audio/subtitles/voiceOver are each exactly the { state, actions } shape
+  // returned by useAudioTrackController/useSubtitleController/
+  // useVoiceOverController — e.g. subtitles.state.tracks,
+  // subtitles.actions.selectTrack(trackId), voiceOver.actions.setDuckVolume(0.15).
 
   return <video ref={videoRef} />;
 }
@@ -88,13 +88,13 @@ component cannot reach past the public surface even if it tries.
 | `PlayerPreferenceStore` | A wrapper over `localStorage`/`electron-store` — audio-language required; `getVoiceOverLanguage`/`setVoiceOverLanguage` optional, for narration-language restore. |
 | `ISubtitleGateway` | A wrapper over `opensubtitles-client.js`. |
 | `IVoiceOverGateway` | A wrapper over an Electron-IPC-backed on-device TTS engine — the library never synthesizes speech itself. `generateLine`'s second `signal?: AbortSignal` parameter is optional to honor. |
-| `IHlsAdapter` | `HlsJsAdapter`, shipped — only override for tests or a different HLS engine. |
+| `IHlsAdapter` | `HlsJsAdapter` (owns the `Hls` instance end-to-end) and `AttachedHlsAdapter` (wraps a host-owned instance — a host that manages its own `Hls` retry/seek/transcode session), both shipped. Override only for tests or a different HLS engine. |
 | `ISubtitleRenderer` | `TextTrackCueRenderer`, shipped — override for e.g. a future ASS/SSA renderer. |
 
 ## Extended Audio Description (WCAG 1.2.7)
 
 Opt in via `voiceOverOptions.allowVideoPause` (or live, `VoiceOverController
-.setAllowVideoPause`/the hook's `setVoiceOverAllowVideoPause`) — off by
+.setAllowVideoPause`/the hook's `voiceOver.actions.setAllowVideoPause`) — off by
 default. When on, a line whose synthesized duration exceeds its cue's own
 window pauses the video entirely for the line's duration instead of merely
 ducking it, then resumes it once the line ends. `voiceOverLinePlayed`'s
@@ -106,7 +106,7 @@ descriptions would trigger before opting in.
 
 `VoiceOverController.setDuckVolume`/`setVoiceOverVolume`/
 `setLookaheadSeconds`/`setLateStartGraceSeconds` (and the React hook's
-`setVoiceOverDuckVolume`/`setVoiceOverVolume`/`setVoiceOverLookaheadSeconds`)
+`voiceOver.actions.setDuckVolume`/`setVoiceOverVolume`/`setLookaheadSeconds`)
 update tuning live, without recreating the player. `setDuckVolume` and
 `setVoiceOverVolume` are independent of each other — a settings popover can
 expose them as two separate sliders, "original sound" (default 15%, how
@@ -114,3 +114,11 @@ loud the video itself plays while a line is narrating) and "voice-over
 sound" (default 100%, the narration line's own volume); neither derives
 from or scales the other. `maxConcurrentSynthesis` (constructor-only,
 default 4) caps how many `generateLine` calls run at once.
+
+Both sliders are, by default, live-multiplied by `setMainVolume` (the
+host's own top-level player volume, `0`–`1`) — the standard "master
+volume" pattern: at main volume 50%, either slider at 100% still only
+plays at 50%. Opt out via `setIgnoreMainVolume` (default off) for
+narration that should ignore the host's main volume entirely. Defaults to
+`mainVolume: 1`, so a host that never calls `setMainVolume` sees no
+behavior change.

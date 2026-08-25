@@ -17,7 +17,14 @@ export class MockVoiceOverGateway implements IVoiceOverGateway {
     return this.voices;
   }
 
-  async generateLine(request: VoiceOverLineRequest): Promise<VoiceOverLineResult> {
+  // `signal` is accepted and ignored, matching IVoiceOverGateway's optional
+  // second parameter. Declaring it matters even though this body never reads
+  // it: tests that assert on cancellation replace this whole method with a
+  // two-parameter function, which a one-parameter declaration would reject.
+  async generateLine(
+    request: VoiceOverLineRequest,
+    _signal?: AbortSignal
+  ): Promise<VoiceOverLineResult> {
     this.generateLineCalls.push(request);
     return (
       this.lineResultByKey.get(lineKey(request.languageCode, request.text)) ?? {

@@ -2,7 +2,7 @@ import { asAudioTrackId, asSubtitleTrackId } from "../types/branding.js";
 import { TrackKind } from "../types/track.js";
 
 import type { MediaPlaylist } from "hls.js";
-import type { AudioTrackId, SubtitleTrackId, SubtitleSourceId } from "../types/branding.js";
+import type { SubtitleSourceId } from "../types/branding.js";
 import type { AudioTrack, SubtitleTrack } from "../types/track.js";
 
 function trackKindFrom(playlist: MediaPlaylist): TrackKind {
@@ -26,7 +26,7 @@ function displayNameFrom(playlist: MediaPlaylist, index: number): string {
  */
 export function mapHlsAudioTrack(playlist: MediaPlaylist, index: number): AudioTrack {
   return {
-    trackId: asAudioTrackId(index) as AudioTrackId,
+    trackId: asAudioTrackId(index),
     displayName: displayNameFrom(playlist, index),
     language: playlist.lang,
     kind: trackKindFrom(playlist),
@@ -44,7 +44,7 @@ export function mapHlsSubtitleTrack(
   sourceId: SubtitleSourceId,
 ): SubtitleTrack {
   return {
-    trackId: asSubtitleTrackId(index) as SubtitleTrackId,
+    trackId: asSubtitleTrackId(index),
     displayName: displayNameFrom(playlist, index),
     language: playlist.lang,
     kind: trackKindFrom(playlist),

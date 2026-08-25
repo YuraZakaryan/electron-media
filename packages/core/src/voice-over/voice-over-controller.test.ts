@@ -256,6 +256,45 @@ describe("VoiceOverController", () => {
     expect(played).toHaveBeenCalledTimes(1);
   });
 
+  it("does not replay an already-played cue when bindSubtitleSource is called again with the same source+trackId", async () => {
+    // A redundant bindSubtitleSource call for the exact same source+trackId
+    // (e.g. an unrelated dependency change re-running whatever host effect
+    // calls it) must be a no-op — before the fix it fell through to
+    // scheduler.setCues([]) just like a genuine rebind, wiping already-
+    // played cue tracking and letting the next cue delivery replay it.
+    vi.useFakeTimers();
+    const source = new MockSubtitleSource(asSubtitleSourceId("subs"), []);
+    controller.bindSubtitleSource(source, asSubtitleTrackId(1));
+    vi.advanceTimersByTime(20);
+    vi.useRealTimers();
+
+    await controller.getTracks();
+    controller.selectTrack(asVoiceOverTrackId("en"));
+    gateway.lineResultByKey.set("en:hello", { success: true, audioUrl: "blob:1", durationSeconds: 1 });
+
+    const played = vi.fn();
+    events.on("voiceOverLinePlayed", played);
+
+    source.emitCues(asSubtitleTrackId(1), [{ startSeconds: 0, endSeconds: 1, text: "hello" }]);
+    ticker.tick();
+    await Promise.resolve();
+    await Promise.resolve();
+    ticker.tick(); // line starts playing
+    expect(played).toHaveBeenCalledTimes(1);
+
+    // Redundant call, identical source+trackId — not a real rebind.
+    vi.useFakeTimers();
+    controller.bindSubtitleSource(source, asSubtitleTrackId(1));
+    vi.advanceTimersByTime(20);
+    vi.useRealTimers();
+    ticker.tick();
+    await Promise.resolve();
+    await Promise.resolve();
+    ticker.tick();
+
+    expect(played).toHaveBeenCalledTimes(1);
+  });
+
   it("hard-stops and clears isGenerating when disabled while playing", async () => {
     await controller.getTracks();
     controller.selectTrack(asVoiceOverTrackId("en"));
@@ -517,6 +556,72 @@ describe("VoiceOverController", () => {
       expect(video.volume).toBeCloseTo(0.42);
       vi.useRealTimers();
     });
+
+    it("setMainVolume and setIgnoreMainVolume forward to the ducking player and scale a subsequently started line", async () => {
+      vi.useFakeTimers();
+      const source = new MockSubtitleSource(asSubtitleSourceId("subs"), []);
+      controller.bindSubtitleSource(source, asSubtitleTrackId(1));
+      vi.advanceTimersByTime(20);
+
+      controller.setDuckVolume(0.2);
+      controller.setVoiceOverVolume(0.8);
+      controller.setMainVolume(0.5);
+
+      await controller.getTracks();
+      controller.selectTrack(asVoiceOverTrackId("en"));
+      const video = fakeVideo();
+      controller.attach(video); // re-attach to pick up the new options in a fresh VoiceOverDuckingPlayer
+      gateway.lineResultByKey.set("en:hello", { success: true, audioUrl: "blob:1", durationSeconds: 1 });
+
+      source.emitCues(asSubtitleTrackId(1), [{ startSeconds: 0, endSeconds: 1, text: "hello" }]);
+      ticker.tick();
+      await vi.advanceTimersByTimeAsync(0);
+      ticker.tick();
+      await vi.advanceTimersByTimeAsync(200); // let the duck fade complete
+
+      expect(video.volume).toBeCloseTo(0.1); // 0.2 * 0.5
+
+      controller.setIgnoreMainVolume(true);
+      expect(video.volume).toBeCloseTo(0.2); // back to the unscaled duckVolume
+
+      vi.useRealTimers();
+    });
+  });
+
+  describe("stop()", () => {
+    it("hard-stops a currently playing line and restores the video's volume, without touching the selected track", async () => {
+      vi.useFakeTimers();
+      const source = new MockSubtitleSource(asSubtitleSourceId("subs"), []);
+      controller.bindSubtitleSource(source, asSubtitleTrackId(1));
+      vi.advanceTimersByTime(20);
+
+      await controller.getTracks();
+      controller.selectTrack(asVoiceOverTrackId("en"));
+      const video = fakeVideo();
+      controller.attach(video);
+      gateway.lineResultByKey.set("en:hello", { success: true, audioUrl: "blob:1", durationSeconds: 5 });
+
+      source.emitCues(asSubtitleTrackId(1), [{ startSeconds: 0, endSeconds: 5, text: "hello" }]);
+      ticker.tick();
+      await vi.advanceTimersByTimeAsync(0);
+      ticker.tick();
+      await vi.advanceTimersByTimeAsync(200); // let the duck fade complete
+      expect(video.volume).toBeCloseTo(0.15); // default duck volume — genuinely ducked
+
+      controller.stop();
+
+      expect(video.volume).toBe(1); // restored, not left stuck at the ducked level
+      // Unlike selectTrack(null), stop() is not an "off" decision — the
+      // user's chosen language is exactly what a host closing/reopening a
+      // title should still see selected.
+      expect(controller.selectedTrack?.language).toBe("en");
+
+      vi.useRealTimers();
+    });
+
+    it("is a harmless no-op when nothing is currently playing", () => {
+      expect(() => controller.stop()).not.toThrow();
+    });
   });
 
   describe("Extended Audio Description (allowVideoPause)", () => {
@@ -686,7 +791,7 @@ describe("VoiceOverController", () => {
         getAudioLanguage: () => null,
         setAudioLanguage: () => {},
         getVoiceOverLanguage: () => stored,
-        setVoiceOverLanguage: (language: string) => {
+        setVoiceOverLanguage: (language: string | null) => {
           stored = language;
         },
       };
@@ -728,6 +833,24 @@ describe("VoiceOverController", () => {
       c.selectTrack(null); // explicit, before getTracks() ever resolves
       await c.getTracks();
       expect(c.selectedTrack).toBeNull();
+    });
+
+    it("clears the stored preference on selectTrack(null), so an explicit off stays off across a later restore", async () => {
+      const store = makeStore("en");
+      const first = new VoiceOverController({ gateway, events, ticker, preferenceStore: store });
+      first.attach(fakeVideo());
+      await first.getTracks();
+      expect(first.selectedTrack?.language).toBe("en"); // auto-restored, as before
+
+      first.selectTrack(null); // user explicitly turns narration off
+      expect(store.getVoiceOverLanguage()).toBeNull();
+
+      // A later restore — e.g. the next app launch — must not read a stale
+      // language back and turn narration on again.
+      const second = new VoiceOverController({ gateway, events, ticker, preferenceStore: store });
+      second.attach(fakeVideo());
+      await second.getTracks();
+      expect(second.selectedTrack).toBeNull();
     });
 
     it("does not throw against a preference store missing the optional voice-over methods", async () => {

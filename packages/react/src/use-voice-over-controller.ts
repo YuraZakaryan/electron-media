@@ -25,7 +25,12 @@ export interface VoiceOverControllerActions {
   setDuckVolume(volume: number): void;
   setVoiceOverVolume(volume: number): void;
   setLookaheadSeconds(seconds: number): void;
+  setNarrationRate(rate: number): void;
   setAllowVideoPause(allow: boolean): void;
+  /** The host's main/master player volume — live-multiplied into `duckVolume`/`voiceOverVolume` unless {@link setIgnoreMainVolume} is on. */
+  setMainVolume(volume: number): void;
+  /** Opts in/out of {@link setMainVolume} scaling `duckVolume`/`voiceOverVolume`. */
+  setIgnoreMainVolume(ignore: boolean): void;
 }
 
 /** @public Return value of {@link useVoiceOverController}. */
@@ -115,8 +120,20 @@ export function useVoiceOverController(
     (seconds: number) => voiceOver?.setLookaheadSeconds(seconds),
     [voiceOver]
   );
+  const setNarrationRate = useCallback(
+    (rate: number) => voiceOver?.setNarrationRate(rate),
+    [voiceOver]
+  );
   const setAllowVideoPause = useCallback(
     (allow: boolean) => voiceOver?.setAllowVideoPause(allow),
+    [voiceOver]
+  );
+  const setMainVolume = useCallback(
+    (volume: number) => voiceOver?.setMainVolume(volume),
+    [voiceOver]
+  );
+  const setIgnoreMainVolume = useCallback(
+    (ignore: boolean) => voiceOver?.setIgnoreMainVolume(ignore),
     [voiceOver]
   );
 
@@ -132,7 +149,10 @@ export function useVoiceOverController(
       setDuckVolume,
       setVoiceOverVolume,
       setLookaheadSeconds,
+      setNarrationRate,
       setAllowVideoPause,
+      setMainVolume,
+      setIgnoreMainVolume,
     }),
     [
       selectTrack,
@@ -141,7 +161,10 @@ export function useVoiceOverController(
       setDuckVolume,
       setVoiceOverVolume,
       setLookaheadSeconds,
+      setNarrationRate,
       setAllowVideoPause,
+      setMainVolume,
+      setIgnoreMainVolume,
     ]
   );
 

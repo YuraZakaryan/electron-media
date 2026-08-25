@@ -62,9 +62,9 @@ export class MockHlsAdapter implements IHlsAdapter {
     callback: (payload: HlsAdapterEvents[TEventName]) => void
   ): () => void {
     const set = this.listeners.get(eventName) ?? new Set();
-    set.add(callback as (payload: never) => void);
+    set.add(callback);
     this.listeners.set(eventName, set);
-    return () => set.delete(callback as (payload: never) => void);
+    return () => set.delete(callback);
   }
 
   /** Test-only helper to simulate the adapter emitting an event. */
@@ -74,7 +74,7 @@ export class MockHlsAdapter implements IHlsAdapter {
   ): void {
     this.listeners
       .get(eventName)
-      ?.forEach((listener) => (listener as (payload: never) => void)(payload as never));
+      ?.forEach((listener) => (listener)(payload as never));
   }
 
   destroy(): void {

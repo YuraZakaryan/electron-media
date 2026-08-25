@@ -19,7 +19,7 @@ import type { VoiceOverControllerOptions } from "../voice-over/voice-over-contro
 export interface MediaPlayerOptions {
   /** Video element playback attaches to. Never inserted into or removed from the DOM by {@link MediaPlayer}. */
   readonly video: HTMLVideoElement;
-  /** HLS engine abstraction; the only shipped implementation is `HlsJsAdapter`. */
+  /** HLS engine abstraction; shipped implementations are `HlsJsAdapter` (owns the `Hls` instance end-to-end) and `AttachedHlsAdapter` (wraps a host-owned instance). */
   readonly hlsAdapter: IHlsAdapter;
   /** Persists the user's audio/subtitle language choices across sessions. Omit to disable auto-restore. */
   readonly preferenceStore?: PlayerPreferenceStore;

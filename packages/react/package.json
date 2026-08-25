@@ -1,7 +1,7 @@
 {
   "name": "@electron-media/react",
-  "version": "0.1.10",
-  "description": "React binding for @electron-media/core — a single useMediaPlayer hook exposing audio/subtitle track selection and playback state.",
+  "version": "0.2.0",
+  "description": "React binding for @electron-media/core — useMediaPlayer and standalone per-controller hooks exposing audio/subtitle track selection, voice-over, and playback state.",
   "type": "module",
   "license": "MIT",
   "homepage": "https://www.npmjs.com/package/@electron-media/react",
@@ -29,7 +29,9 @@
     "dist"
   ],
   "scripts": {
+    "prebuild": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
@@ -40,7 +42,7 @@
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.2",
-    "@types/react": "^18.3.0",
+    "@types/react": "^19.0.0",
     "jsdom": "^30.0.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

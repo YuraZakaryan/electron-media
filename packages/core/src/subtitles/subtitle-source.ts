@@ -1,5 +1,6 @@
 import type { SubtitleSourceId, SubtitleTrackId } from "../types/branding.js";
 import type { SubtitleTrack } from "../types/track.js";
+import type { CanonicalCue } from "../types/cue.js";
 
 /**
  * A provider of subtitle tracks — an HLS manifest, a VOD-extracted track set,
@@ -56,7 +57,7 @@ export interface ISubtitleSource {
    */
   onCuesChanged(
     trackId: SubtitleTrackId,
-    callback: (cues: readonly import("../types/cue.js").CanonicalCue[]) => void
+    callback: (cues: readonly CanonicalCue[]) => void
   ): () => void;
 
   /**

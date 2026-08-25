@@ -9,6 +9,7 @@ import type { CanonicalCue } from "../types/cue.js";
 const DEFAULT_LOOKAHEAD_SECONDS = 6;
 const DEFAULT_LATE_START_GRACE_SECONDS = 4;
 const DEFAULT_MAX_CONCURRENT_SYNTHESIS = 4;
+const DEFAULT_NARRATION_RATE = 1;
 /** How far ahead of the *next* cue's own start, in seconds, an unfinished Extended Audio Description line signals its video-pause — late enough to look like a natural freeze right before the next subtitle, not a premature one. */
 const DEFAULT_EXTENDED_PAUSE_LEAD_SECONDS = 0.15;
 /** A forward jump in `video.currentTime` larger than this, between two consecutive ticks, is treated as a seek rather than normal playback advancing. */
@@ -47,6 +48,17 @@ export interface VoiceOverCueSchedulerOptions {
   readonly maxConcurrentSynthesis?: number;
   /** How far ahead of the *next* cue's own start, in seconds, {@link onExtendedPauseDue} fires for a still-playing Extended Audio Description line. @defaultValue 0.15 */
   readonly extendedPauseLeadSeconds?: number;
+  /**
+   * Multiplier applied to each cue's own window
+   * (`endSeconds - startSeconds`) before it's requested as
+   * `targetDurationSeconds` from the gateway — a rate above 1 asks for a
+   * *shorter* window, so a length-fitting gateway implementation speaks
+   * faster to fit; below 1 asks for a longer one. Purely a hint to the
+   * gateway (this class never touches audio directly) — a gateway that
+   * ignores `targetDurationSeconds` entirely is unaffected.
+   * @defaultValue 1
+   */
+  readonly narrationRate?: number;
 }
 
 interface CueState {
@@ -86,6 +98,7 @@ export class VoiceOverCueScheduler {
   private lateStartGraceSeconds: number;
   private readonly maxConcurrentSynthesis: number;
   private extendedPauseLeadSeconds: number;
+  private narrationRate: number;
   private delaySeconds = 0;
 
   private readonly cueStateByKey = new Map<string, CueState>();
@@ -123,6 +136,7 @@ export class VoiceOverCueScheduler {
       options.maxConcurrentSynthesis ?? DEFAULT_MAX_CONCURRENT_SYNTHESIS;
     this.extendedPauseLeadSeconds =
       options.extendedPauseLeadSeconds ?? DEFAULT_EXTENDED_PAUSE_LEAD_SECONDS;
+    this.narrationRate = options.narrationRate ?? DEFAULT_NARRATION_RATE;
   }
 
   /** Attaches the video whose `currentTime`/`paused` drives scheduling and starts ticking. Safe to call again with a different element. */
@@ -211,9 +225,9 @@ export class VoiceOverCueScheduler {
     this.cueOrder = newOrder;
   }
 
-  /** Sets which language to synthesize in, or disables voice-over entirely when `null`. Invalidates in-flight synthesis for the previous language. */
+  /** Sets which language to synthesize in, or disables voice-over entirely when `null`. Invalidates in-flight synthesis and any already-synthesized-but-not-yet-playing line from the previous language. */
   setLanguageCode(languageCode: string | null): void {
-    this.cancelAllPending();
+    this.invalidateStaleCues();
     this.bumpEpoch();
     this.languageCode = languageCode;
     if (languageCode === null) this.hardStopPlayingCue();
@@ -237,6 +251,11 @@ export class VoiceOverCueScheduler {
   /** Updates the Extended Audio Description pause lead. Takes effect on the next tick. */
   setExtendedPauseLeadSeconds(seconds: number): void {
     this.extendedPauseLeadSeconds = seconds;
+  }
+
+  /** Updates the narration rate — see {@link VoiceOverCueSchedulerOptions.narrationRate}. Applies to the next `generateLine` call onward; already-synthesized/in-flight lines are unaffected. */
+  setNarrationRate(rate: number): void {
+    this.narrationRate = rate;
   }
 
   /**
@@ -335,7 +354,7 @@ export class VoiceOverCueScheduler {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.cancelAllPending();
+    this.invalidateStaleCues();
     this.detach();
     this.bumpEpoch();
     this.cueStateByKey.clear();
@@ -511,7 +530,9 @@ export class VoiceOverCueScheduler {
         {
           text,
           languageCode,
-          targetDurationSeconds: state.cue.endSeconds - state.cue.startSeconds,
+          targetDurationSeconds:
+            (state.cue.endSeconds - state.cue.startSeconds) /
+            this.narrationRate,
         },
         abortController.signal
       )
@@ -661,14 +682,50 @@ export class VoiceOverCueScheduler {
     if (state) this.setStatus(cueKey, state, VoiceOverCuePlaybackState.Played);
   }
 
-  private cancelAllPending(): void {
-    const languageCode = this.languageCode;
-    if (languageCode === null) return;
-    for (const state of this.cueStateByKey.values()) {
-      if (state.status !== VoiceOverCuePlaybackState.Pending) continue;
-      const text = getSpeakableText(state.cue.text) ?? state.cue.text;
-      void this.gateway.cancelLine({ languageCode, text });
-      state.abortController?.abort();
+  /**
+   * Immediately stops whatever line is currently playing (fires
+   * {@link onHardStop}, which the controller wires to restoring the
+   * video's volume), without changing {@link setLanguageCode}'s own
+   * state — unlike passing `null` there, this is not an "off" decision.
+   * For a host that needs to silence in-progress narration without it
+   * being the user's explicit choice — e.g. closing the current title
+   * while a line is mid-narration, where the next title should still
+   * auto-restore the same language.
+   */
+  stop(): void {
+    this.hardStopPlayingCue();
+  }
+
+  /**
+   * Invalidates every non-playing cue left over from the previous language:
+   * an in-flight ({@link VoiceOverCuePlaybackState.Pending}) synthesis is
+   * best-effort cancelled, and an already-resolved
+   * ({@link VoiceOverCuePlaybackState.Ready}) line is discarded — both
+   * transition straight to {@link VoiceOverCuePlaybackState.Skipped} rather
+   * than being left to resolve (or sit) under a language that's no longer
+   * selected. Without the `Ready` half of this, a line pre-synthesized
+   * during the previous selection's lookahead window kept sitting in
+   * `Ready` and was still handed to {@link startNextDueLine} once its own
+   * cue became due — even after the user turned narration off (or switched
+   * languages) — reading as narration briefly resuming a few seconds after
+   * being turned off, right as that pre-fetched line's cue arrived.
+   */
+  private invalidateStaleCues(): void {
+    const previousLanguageCode = this.languageCode;
+    for (const [key, state] of this.cueStateByKey) {
+      if (state.status === VoiceOverCuePlaybackState.Pending) {
+        if (previousLanguageCode !== null) {
+          const text = getSpeakableText(state.cue.text) ?? state.cue.text;
+          void this.gateway.cancelLine({ languageCode: previousLanguageCode, text });
+        }
+        state.abortController?.abort();
+        this.setStatus(key, state, VoiceOverCuePlaybackState.Skipped);
+        this.lineSkippedListeners.forEach((listener) => listener(key));
+      } else if (state.status === VoiceOverCuePlaybackState.Ready) {
+        state.line = undefined;
+        this.setStatus(key, state, VoiceOverCuePlaybackState.Skipped);
+        this.lineSkippedListeners.forEach((listener) => listener(key));
+      }
     }
   }
 

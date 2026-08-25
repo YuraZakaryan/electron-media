@@ -48,6 +48,27 @@ export interface VoiceOverDuckingPlayerOptions {
    * @defaultValue false
    */
   readonly allowVideoPause?: boolean;
+  /**
+   * The host's main/master player volume (e.g. its own top-level volume
+   * slider), `0`–`1`. Live-multiplied into both `duckVolume` and
+   * `voiceOverVolume` unless {@link ignoreMainVolume} is set — the
+   * standard "master volume" pattern from game/media audio settings: a
+   * master level scales every sub-channel, each of which keeps its own
+   * independent range for relative adjustment. Defaults to `1`, so a host
+   * that never calls {@link VoiceOverDuckingPlayer.setMainVolume} sees no
+   * behavior change at all.
+   * @defaultValue 1
+   */
+  readonly mainVolume?: number;
+  /**
+   * Opts *out* of {@link mainVolume} scaling `duckVolume`/`voiceOverVolume`
+   * — narration then always plays at its own sliders' nominal levels
+   * regardless of the host's main volume. Off by default: muting or
+   * lowering the main volume mutes/lowers narration too, matching how a
+   * master volume affects every other channel.
+   * @defaultValue false
+   */
+  readonly ignoreMainVolume?: boolean;
 }
 
 /**
@@ -62,7 +83,12 @@ export interface VoiceOverDuckingPlayerOptions {
  * how loud the *original* video audio plays while ducked (default 15%) —
  * and {@link VoiceOverDuckingPlayerOptions.voiceOverVolume} — how loud the
  * *narration* line itself plays (default 100%). Neither derives from or
- * scales the other.
+ * scales the other — but both are, by default, live-multiplied by
+ * {@link VoiceOverDuckingPlayerOptions.mainVolume} (opt out via
+ * {@link VoiceOverDuckingPlayerOptions.ignoreMainVolume}), so the host's
+ * own main/master volume acts as a ceiling over each: at main volume 50%,
+ * a duck/voice-over slider at 100% still only plays at 50%, exactly the
+ * way a game's music/SFX sliders sit under its master volume slider.
  *
  * Fade behavior: fading in (duck) and fading back out (restore after a line
  * finishes normally) are symmetric — a deliberate fix versus the ported app
@@ -83,12 +109,31 @@ export class VoiceOverDuckingPlayer {
   private readonly onLineEnded?: (cueKey: string) => void;
   private readonly fadeCurve: FadeCurve;
   private allowVideoPause: boolean;
+  private mainVolume: number;
+  private ignoreMainVolume: boolean;
 
   private videoOriginalVolume = 1;
   private currentAudio: HTMLAudioElement | null = null;
   private currentCueKey: string | null = null;
   private fadeIntervalId: ReturnType<typeof setInterval> | null = null;
   private pausedForExtendedDescription = false;
+  /**
+   * `true` from the moment a line starts ducking until `video.volume` is
+   * confirmed genuinely back at {@link videoOriginalVolume} — via a
+   * restore fade actually completing, a hard stop, or the Extended
+   * Audio Description resume path. While `true`, {@link playLine} reuses
+   * the existing {@link videoOriginalVolume} instead of re-capturing it
+   * from `video.volume`. Without this, a line starting before the
+   * *previous* line's restore-up fade (or even its own duck-in fade, if
+   * immediately superseded) finished would capture whatever partial,
+   * still-ducked volume `video.volume` happened to be at that moment as
+   * the new "original" — ratcheting the real original volume down toward
+   * `duckVolume` a little more with each fast-following line, until
+   * several such lines in a row (dense, close-together dialogue) leave
+   * the video's own audio barely audible or silent even after narration
+   * fully stops.
+   */
+  private isDucked = false;
 
   constructor(options: VoiceOverDuckingPlayerOptions) {
     this.video = options.video;
@@ -101,6 +146,8 @@ export class VoiceOverDuckingPlayer {
     this.onLineEnded = options.onLineEnded;
     this.fadeCurve = options.fadeCurve ?? linearFadeCurve;
     this.allowVideoPause = options.allowVideoPause ?? false;
+    this.mainVolume = options.mainVolume ?? 1;
+    this.ignoreMainVolume = options.ignoreMainVolume ?? false;
   }
 
   /** `true` while the video is paused by this class for an Extended Audio Description line. */
@@ -126,8 +173,11 @@ export class VoiceOverDuckingPlayer {
     this.currentAudio = audio;
     audio.volume = this.effectiveLineVolume();
 
-    this.videoOriginalVolume = this.video.volume;
-    this.fadeVideoVolume(this.videoOriginalVolume, this.duckVolume);
+    if (!this.isDucked) {
+      this.videoOriginalVolume = this.video.volume;
+      this.isDucked = true;
+    }
+    this.fadeVideoVolume(this.video.volume, this.effectiveDuckVolume());
 
     audio.addEventListener("ended", () => {
       if (this.currentAudio !== audio) return; // superseded; not this line's restore to run
@@ -137,11 +187,14 @@ export class VoiceOverDuckingPlayer {
       if (this.pausedForExtendedDescription) {
         this.pausedForExtendedDescription = false;
         this.video.volume = this.videoOriginalVolume;
+        this.isDucked = false;
         this.video.play().catch(() => {
           this.onVideoResumeRejected?.(cueKey);
         });
       } else {
-        this.fadeVideoVolume(this.video.volume, this.videoOriginalVolume);
+        this.fadeVideoVolume(this.video.volume, this.videoOriginalVolume, () => {
+          this.isDucked = false;
+        });
       }
     });
 
@@ -192,6 +245,7 @@ export class VoiceOverDuckingPlayer {
 
     if (hard) {
       this.video.volume = this.videoOriginalVolume;
+      this.isDucked = false;
     }
   }
 
@@ -226,9 +280,20 @@ export class VoiceOverDuckingPlayer {
     this.stopLine(true);
   }
 
-  /** Updates the duck target volume. Takes effect on the next line started; does not re-fade a line already playing. */
+  /**
+   * Updates the duck target volume. If a line is currently playing and the
+   * video is already steadily ducked (no fade animation in flight, not
+   * paused for Extended Audio Description), re-applies immediately — the
+   * same live behavior {@link setVoiceOverVolume} already has. Without
+   * this, the slider driving it would have no audible effect until the
+   * *next* line starts, which most of the time (no narration currently
+   * playing) reads as the control doing nothing at all. A change made
+   * mid-fade is not retargeted — the in-flight fade's own `to` value wins
+   * and this takes effect once that fade completes.
+   */
   setDuckVolume(volume: number): void {
     this.duckVolume = volume;
+    this.reapplyDuckTargetIfSteady();
   }
 
   /** Updates whether Extended Audio Description (video pause) is allowed. Takes effect on the next line started; does not retroactively pause or resume a line already playing. */
@@ -236,11 +301,62 @@ export class VoiceOverDuckingPlayer {
     this.allowVideoPause = allow;
   }
 
-  private effectiveLineVolume(): number {
-    return clamp01(this.voiceOverVolume);
+  /**
+   * Updates the host's main/master volume. Re-applies immediately — both
+   * to the narration line's own `Audio.volume` (if one is currently
+   * playing) and, once steadily ducked, to the duck target — mirroring
+   * {@link setDuckVolume}/{@link setVoiceOverVolume}'s existing live
+   * re-apply behavior. No-op on the *shape* of anything if
+   * {@link setIgnoreMainVolume} is on; the value is still stored so
+   * turning main-volume-respect back on doesn't need a fresh value pushed.
+   */
+  setMainVolume(volume: number): void {
+    this.mainVolume = volume;
+    if (this.currentAudio) this.currentAudio.volume = this.effectiveLineVolume();
+    this.reapplyDuckTargetIfSteady();
   }
 
-  private fadeVideoVolume(from: number, to: number): void {
+  /** Opts in/out of {@link setMainVolume} scaling `duckVolume`/`voiceOverVolume`. Re-applies immediately, mirroring `setMainVolume`. */
+  setIgnoreMainVolume(ignore: boolean): void {
+    this.ignoreMainVolume = ignore;
+    if (this.currentAudio) this.currentAudio.volume = this.effectiveLineVolume();
+    this.reapplyDuckTargetIfSteady();
+  }
+
+  /** Re-applies the current duck target to `video.volume` only when steadily ducked (a line is playing, no fade in flight, not paused for Extended Audio Description) — the shared guard behind `setDuckVolume`/`setMainVolume`/`setIgnoreMainVolume`'s live re-apply. */
+  private reapplyDuckTargetIfSteady(): void {
+    if (
+      this.currentAudio &&
+      this.fadeIntervalId === null &&
+      !this.pausedForExtendedDescription
+    ) {
+      this.video.volume = this.effectiveDuckVolume();
+    }
+  }
+
+  /** `duckVolume`, scaled by the main volume unless {@link ignoreMainVolume} is set. */
+  private effectiveDuckVolume(): number {
+    return clamp01(this.duckVolume) * this.mainVolumeMultiplier();
+  }
+
+  private effectiveLineVolume(): number {
+    return clamp01(this.voiceOverVolume) * this.mainVolumeMultiplier();
+  }
+
+  /** `1` (no-op) when {@link ignoreMainVolume} is set; otherwise the clamped main volume. */
+  private mainVolumeMultiplier(): number {
+    return this.ignoreMainVolume ? 1 : clamp01(this.mainVolume);
+  }
+
+  /**
+   * `onComplete` fires only if the fade runs all its steps uninterrupted —
+   * never when it's cut short by {@link clearFadeInterval} being called
+   * from elsewhere (a new line superseding this one, a hard stop). Callers
+   * rely on that distinction: {@link playLine}'s restore-up fade uses it to
+   * mark {@link isDucked} false only once genuinely back at
+   * {@link videoOriginalVolume}, not merely once *a* restore attempt started.
+   */
+  private fadeVideoVolume(from: number, to: number, onComplete?: () => void): void {
     this.clearFadeInterval();
     let step = 0;
     const steps = this.duckFadeSteps;
@@ -250,7 +366,10 @@ export class VoiceOverDuckingPlayer {
       const timeProgress = Math.min(step / steps, 1);
       const weight = clamp01(this.fadeCurve(timeProgress));
       this.video.volume = from + (to - from) * weight;
-      if (step >= steps) this.clearFadeInterval();
+      if (step >= steps) {
+        this.clearFadeInterval();
+        onComplete?.();
+      }
     }, this.duckFadeStepMs);
   }
 

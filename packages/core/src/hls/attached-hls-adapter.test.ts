@@ -5,6 +5,7 @@ import { AttachedHlsAdapter } from "./attached-hls-adapter.js";
 
 import type Hls from "hls.js";
 import type { MediaPlaylist } from "hls.js";
+import type { IHlsAdapter } from "./hls-adapter.js";
 
 /**
  * Minimal fake of the slice of `Hls` this adapter actually touches:
@@ -336,7 +337,12 @@ describe("AttachedHlsAdapter — bad cases", () => {
   });
 
   it("detach()/attach()/loadSource() (the IHlsAdapter no-op surface) never throw", () => {
-    const adapter = new AttachedHlsAdapter();
+    // Typed as the interface, not the class: these three satisfy IHlsAdapter
+    // by ignoring their parameters entirely (see the class's own doc comment
+    // — the host owns the Hls instance), so the concrete type declares them
+    // as zero-arg. Calling them the way a consumer does, through the
+    // interface, is what this test is actually about.
+    const adapter: IHlsAdapter = new AttachedHlsAdapter();
 
     expect(() => {
       adapter.attach(undefined as never);

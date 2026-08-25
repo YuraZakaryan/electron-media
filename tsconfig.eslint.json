@@ -1,0 +1,45 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+
+    "jsx": "react-jsx",
+
+    // playwright.config.ts reads process.env.CI, and nothing else in the
+    // repo pulls in Node types. Safe alongside lib.dom: every timer handle
+    // in packages/core is already written as ReturnType<typeof setInterval>
+    // rather than `number`, so NodeJS.Timeout never collides.
+    "types": ["node"],
+
+    // Resolve the workspace package to SOURCE rather than packages/core/dist.
+    // Without this, linting packages/react silently depends on a prior
+    // build: on a fresh clone @electron-media/core fails to resolve, every
+    // import from it degrades to `any`, and the whole no-unsafe-* family
+    // erupts across the package. The build tsconfigs have no `paths`, so
+    // `pnpm build` remains the only authority on the emitted .d.ts surface.
+    "paths": {
+      "@electron-media/core": ["./packages/core/src/index.ts"],
+      "@electron-media/react": ["./packages/react/src/index.ts"]
+    }
+  },
+
+  // Deliberately maximal: the two build tsconfigs exclude `src/**/*.test.ts`
+  // and `src/testing/**`, and nothing at all owns e2e/tests/*.spec.ts,
+  // playwright.config.ts or packages/react/vitest.config.ts. Those files are
+  // the repo's heaviest async surface (a missing `await` on a Playwright
+  // assertion passes for the wrong reason rather than failing), so they are
+  // exactly what type-aware linting is for. Covering them by glob means a
+  // newly added test or spec needs no config edit.
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": [
+    "**/node_modules",
+    "**/dist",
+    // NOT source. e2e/generate-stream.mjs emits MPEG-TS video segments here,
+    // and MPEG-TS segments are named *.ts — `file` reports them as binary
+    // `data`. A bare **/*.ts glob would hand them to the TS parser.
+    "e2e/.generated"
+  ]
+}

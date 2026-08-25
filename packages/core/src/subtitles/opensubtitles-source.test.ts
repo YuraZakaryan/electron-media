@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { asSubtitleSourceId, asSubtitleTrackId } from "../types/branding.js";
+import { asSubtitleSourceId } from "../types/branding.js";
 import { TrackKind } from "../types/track.js";
 import { MockSubtitleGateway } from "../testing/mock-subtitle-gateway.js";
 import { OpenSubtitlesSource } from "./opensubtitles-source.js";

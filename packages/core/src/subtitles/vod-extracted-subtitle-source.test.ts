@@ -303,7 +303,7 @@ describe("VodExtractedSubtitleSource", () => {
       );
     });
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = globalFetch as unknown as typeof fetch;
+    globalThis.fetch = globalFetch;
 
     try {
       const source = new VodExtractedSubtitleSource({

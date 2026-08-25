@@ -66,6 +66,8 @@ describe("useVoiceOverController", () => {
     expect(() => act(() => harness.result.actions.setVoiceOverVolume(0.8))).not.toThrow();
     expect(() => act(() => harness.result.actions.setLookaheadSeconds(3))).not.toThrow();
     expect(() => act(() => harness.result.actions.setAllowVideoPause(true))).not.toThrow();
+    expect(() => act(() => harness.result.actions.setMainVolume(0.5))).not.toThrow();
+    expect(() => act(() => harness.result.actions.setIgnoreMainVolume(true))).not.toThrow();
   });
 
   it("populates state.tracks from the gateway and selectTrack/disableVoiceOver proxy to the controller", async () => {

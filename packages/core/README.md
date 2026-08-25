@@ -1,6 +1,6 @@
 # @electron-media/core
 
-Framework-agnostic multi-audio-track selection, and native/VOD-extracted/remote subtitle composition for HLS playback in Electron media apps, built on [hls.js](https://github.com/video-dev/hls.js).
+Framework-agnostic multi-audio-track selection, native/VOD-extracted/remote subtitle composition, and voice-over (TTS narration) for HLS playback in Electron media apps, built on [hls.js](https://github.com/video-dev/hls.js).
 
 Not a full player — it composes track selection and subtitle rendering behind a small facade (`MediaPlayer`) and a set of narrow, independently testable classes. HLS lifecycle, transcoding, and DRM stay outside its scope; bring your own via the adapter/gateway interfaces below.
 
@@ -19,6 +19,7 @@ npm install @electron-media/core hls.js
 - **VOD-extracted subtitles**: `VodExtractedSubtitleSource` — polls a growing `.vtt` file (e.g. one your backend extracts via ffmpeg during transcode).
 - **Remote subtitles**: `OpenSubtitlesSource` — search/download/parse SRT from OpenSubtitles or any compatible provider, via an app-supplied `ISubtitleGateway`.
 - **Composition**: `SubtitleRegistry` (merges track lists across sources) + `SubtitleSelectionService` (active track) + `SubtitleDelayProcessor` (user timing nudge) + `TextTrackCueRenderer` (renders via `HTMLVideoElement.addTextTrack`/`addCue`, working around the Chromium/WebKit "flip to showing before cues exist" bug) — wired together by `SubtitleController`, which also self-heals if a host-owned media engine (e.g. hls.js's own `TimelineController`) wipes the video's text tracks out from under it.
+- **Voice-over**: `VoiceOverController` — TTS-narrates a bound subtitle track's cues via an app-supplied `IVoiceOverGateway`, ducks the video's own audio while a line plays, and supports WCAG 1.2.7 Extended Audio Description (pausing the video for a line that doesn't fit its cue window). Non-dialogue text (`[Music]`, `♪...♪`) is filtered out automatically before synthesis.
 
 ## Quick start
 
@@ -38,6 +39,10 @@ player.audio.select(tracks[0].trackId);
 
 player.subtitles.onTracksChanged((tracks) => console.log(tracks));
 player.subtitles.selectTrack(tracks[0].trackId);
+
+// voice-over is optional — player.voiceOver is null unless a
+// voiceOverGateway was passed to MediaPlayer's constructor.
+player.voiceOver?.selectTrack(voiceOverTrackId);
 
 // later
 player.destroy();
@@ -90,6 +95,26 @@ Lets the user pick which subtitles show, adjust their timing, and handles actual
 
 Good to know: some HLS engines (like hls.js) occasionally clear the video's subtitle tracks as a side effect of their own internal work. This controller detects that and automatically redraws the subtitles — you don't need to do anything about it.
 
+### `VoiceOverController` (available as `player.voiceOver`, `null` unless enabled)
+
+Reads a bound subtitle track's cues aloud via TTS, ducking the video's own audio while narration plays. Only present when `MediaPlayer` was constructed with a `voiceOverGateway` — the library never synthesizes speech itself, a host application implements `IVoiceOverGateway` over its own TTS engine.
+
+| Member | Description |
+| --- | --- |
+| `getTracks()` | Returns the available narration languages/voices, fetched from the gateway once and cached. |
+| `selectTrack(trackId)` | Enables narration in the given language, or pass `null` to disable voice-over. Off by default — there's no "pick something anyway" fallback the way audio tracks have. |
+| `.selectedTrack` | The currently selected voice-over track, or `null` if disabled. |
+| `onSelectionChanged(callback)` | Runs `callback` whenever the selected track changes. |
+| `bindSubtitleSource(source, trackId)` | Feeds `source`'s cues for `trackId` into narration, *without* turning that subtitle track on visibly. Deciding which subtitle track to auto-narrate (when the user hasn't picked one) is application policy — see `docs/extension-points.md`'s "Recipe: deciding which subtitle track to narrate". |
+| `setDuckVolume(volume)` / `setVoiceOverVolume(volume)` | Two independent, live-updatable levers for a settings UI: how loud the *original* video audio plays while ducked (default 15%), and how loud the *narration* itself plays (default 100%). Neither derives from the other. |
+| `setMainVolume(volume)` / `setIgnoreMainVolume(ignore)` | Both levers above are, by default, live-multiplied by the host's own main/master player volume (`0`–`1`) — the standard "master volume" pattern: at main volume 50%, either slider at 100% still only plays at 50%. `setIgnoreMainVolume(true)` opts narration out of this entirely. Defaults to `mainVolume: 1` — a host that never calls `setMainVolume` sees no behavior change. |
+| `setNarrationRate(rate)` | Live-updatable multiplier (default 1) applied to each cue's own window before it's requested as `targetDurationSeconds` — above 1 asks a length-fitting gateway to speak faster to fit a shorter window, below 1 slower/longer. Purely a hint; a gateway ignoring `targetDurationSeconds` is unaffected. Useful when a chosen TTS voice's natural pace doesn't fit its cues well by default. |
+| `setAllowVideoPause(allow)` | Opts into WCAG 1.2.7 Extended Audio Description: when a line's synthesized duration exceeds its cue's own window, the video pauses entirely (right before the *next* cue's own start, not at this line's start) instead of merely ducking, then resumes once the line finishes. Off by default. |
+| `isGenerating` / `onGeneratingChanged(callback)` | Whether a line's synthesis is currently in flight — useful for a loading indicator. |
+| `stop()` | Immediately hard-stops a currently playing line and restores the video's volume, *without* changing the selected track or persisted preference — unlike `selectTrack(null)`, this isn't an "off" decision. For host-side cleanup (e.g. closing the current title while a line is mid-narration) where the user's own choice should still apply, unchanged, next time. |
+
+Scheduling (which cue is due, when a line starts) keeps ticking via `setInterval` while the document is hidden — a minimized window or a backgrounded Electron host — rather than relying solely on `requestAnimationFrame`, which browsers fully suspend while hidden. Narration keeps advancing on schedule instead of appearing to pause until the app regains focus.
+
 ### `HlsJsAdapter`
 
 The ready-to-use way to play HLS streams — pass `new HlsJsAdapter()` to `MediaPlayer` and it handles the rest (using the [hls.js](https://github.com/video-dev/hls.js) library under the hood). Only reach for something else if you're plugging in a different HLS engine, or you already manage your own `Hls` instance elsewhere in your app (see `AttachedHlsAdapter` below).
@@ -115,7 +140,7 @@ These are the building blocks `MediaPlayer` assembles for you. You'll only reach
 | `HlsNativeSubtitleSource` | Supplies subtitles that are already embedded directly in the HLS stream itself (no extra setup needed — hls.js draws these on its own). |
 | `VodExtractedSubtitleSource` | Supplies subtitles from a `.vtt` file your own backend generates during video processing (e.g. via ffmpeg) — even while that file is still being written to. It checks the file periodically and picks up new lines as they appear. |
 | `OpenSubtitlesSource` | Supplies subtitles downloaded from an online subtitle provider like OpenSubtitles. Call `search(...)` to look up subtitles for a piece of content (by title, TMDB id, etc.); the user's pick is then downloaded in full when selected. |
-| `PlayerError`, `SubtitleError` | The error types this library throws. Catch `PlayerError` to handle any failure from this library, or catch `SubtitleError` specifically to handle subtitle-related failures only. |
+| `PlayerError`, `SubtitleError`, `VoiceOverError` | The error types this library throws. Catch `PlayerError` to handle any failure from this library, or catch `SubtitleError`/`VoiceOverError` specifically to handle subtitle- or voice-over-related failures only. |
 
 For exact technical details on any of these, the source files themselves carry full documentation — see also [`docs/public-api.md`](../../docs/public-api.md).
 
@@ -124,11 +149,12 @@ For exact technical details on any of these, the source files themselves carry f
 - `IHlsAdapter` — swap in your own HLS engine, or an `Hls` instance your app already owns and manages (see `docs/extension-points.md`).
 - `ISubtitleSource` — add a new subtitle provider beyond native/VOD-extracted/OpenSubtitles.
 - `ISubtitleRenderer` — replace the default `TextTrackCueRenderer` (e.g. a canvas overlay for ASS/SSA positioning).
+- `IVoiceOverGateway` — implement TTS synthesis over your own engine (e.g. an on-device model reached via Electron IPC); omit entirely to disable voice-over.
 - `PlayerPreferenceStore` / `ISubtitleGateway` — adapt to your app's own storage and OpenSubtitles-compatible backend.
 
 ## Docs
 
-See `docs/` in the repository: `architecture.md`, `public-api.md`, `lifecycle.md`, `extension-points.md`, `naming-conventions.md`, `design-principles.md`.
+See `docs/` in the repository: `architecture.md`, `public-api.md`, `lifecycle.md`, `extension-points.md`, `naming-conventions.md`, `design-principles.md`, `releasing.md`.
 
 ## Scope
 

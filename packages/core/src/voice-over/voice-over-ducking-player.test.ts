@@ -123,6 +123,97 @@ describe("VoiceOverDuckingPlayer", () => {
     expect(video.volume).toBe(0); // still ducked for the active (second) line
   });
 
+  describe("videoOriginalVolume drift across fast-following lines (isDucked)", () => {
+    it("restores to the true original after a second line starts before the first line's restore-up fade finishes", () => {
+      const video = fakeVideo(1);
+      const player = new VoiceOverDuckingPlayer({
+        video,
+        duckVolume: 0,
+        duckFadeSteps: 5,
+        duckFadeStepMs: 30,
+      });
+
+      player.playLine("cue-1", "blob:1");
+      vi.advanceTimersByTime(150); // duck-in fully settled at 0
+      FakeAudio.instances[0].fire("ended");
+      vi.advanceTimersByTime(60); // restore-up only 2/5 steps in (video.volume = 0.4)
+
+      // "cue-2" (e.g. the next subtitle, close behind the first) starts
+      // before cue-1's restore finished. Before the fix, this captured the
+      // interrupted 0.4 as the new "original".
+      player.playLine("cue-2", "blob:2");
+      FakeAudio.instances[1].fire("ended");
+      vi.advanceTimersByTime(150); // cue-2's own restore-up fully settles
+
+      expect(video.volume).toBe(1); // back to the TRUE original, not 0.4
+    });
+
+    it("restores to the true original after a second line supersedes the first mid duck-in fade", () => {
+      const video = fakeVideo(1);
+      const player = new VoiceOverDuckingPlayer({
+        video,
+        duckVolume: 0,
+        duckFadeSteps: 5,
+        duckFadeStepMs: 30,
+      });
+
+      player.playLine("cue-1", "blob:1");
+      vi.advanceTimersByTime(60); // duck-in only 2/5 steps in (video.volume = 0.6)
+
+      player.playLine("cue-2", "blob:2"); // supersedes before cue-1 ever fully ducked
+      FakeAudio.instances[1].fire("ended");
+      vi.advanceTimersByTime(150); // cue-2's restore-up fully settles
+
+      expect(video.volume).toBe(1); // back to the TRUE original, not 0.6
+    });
+
+    it("does not drift across many rapid, close-together lines (dense dialogue)", () => {
+      const video = fakeVideo(1);
+      const player = new VoiceOverDuckingPlayer({
+        video,
+        duckVolume: 0,
+        duckFadeSteps: 5,
+        duckFadeStepMs: 30,
+      });
+
+      for (let i = 0; i < 6; i++) {
+        player.playLine(`cue-${i}`, `blob:${i}`);
+        vi.advanceTimersByTime(45); // supersede mid fade, whichever direction, every time
+        FakeAudio.instances[i].fire("ended");
+      }
+      vi.advanceTimersByTime(150); // let the final line's restore fully settle
+
+      expect(video.volume).toBe(1); // never ratcheted down toward duckVolume
+    });
+
+    it("a hard stop mid-restore-fade still leaves the next line free to recapture a fresh original", () => {
+      const video = fakeVideo(1);
+      const player = new VoiceOverDuckingPlayer({
+        video,
+        duckVolume: 0,
+        duckFadeSteps: 5,
+        duckFadeStepMs: 30,
+      });
+
+      player.playLine("cue-1", "blob:1");
+      vi.advanceTimersByTime(150);
+      FakeAudio.instances[0].fire("ended");
+      vi.advanceTimersByTime(60); // restore-up partway (0.4)
+
+      player.stopLine(true); // e.g. a seek — hard-restores and clears isDucked
+      expect(video.volume).toBe(1);
+
+      // The user then changes the video's own volume via the native
+      // controls before the next line starts.
+      video.volume = 0.5;
+      player.playLine("cue-2", "blob:2");
+      FakeAudio.instances[1].fire("ended");
+      vi.advanceTimersByTime(150);
+
+      expect(video.volume).toBe(0.5); // recaptured the new original, not stuck at 1
+    });
+  });
+
   it("re-applies the narration volume immediately when setVoiceOverVolume is called mid-line, independent of duckVolume", () => {
     const video = fakeVideo(1);
     const player = new VoiceOverDuckingPlayer({ video, duckVolume: 0 });
@@ -133,6 +224,60 @@ describe("VoiceOverDuckingPlayer", () => {
 
     player.setVoiceOverVolume(0);
     expect(FakeAudio.instances[0].volume).toBe(0);
+  });
+
+  it("re-applies the duck volume immediately when setDuckVolume is called mid-line, once the duck-in fade has settled", () => {
+    const video = fakeVideo(1);
+    const player = new VoiceOverDuckingPlayer({
+      video,
+      duckVolume: 0,
+      duckFadeSteps: 5,
+      duckFadeStepMs: 30,
+    });
+    player.playLine("cue-1", "blob:1");
+    vi.advanceTimersByTime(150); // finish duck-in fade
+    expect(video.volume).toBe(0);
+
+    player.setDuckVolume(0.3);
+    expect(video.volume).toBeCloseTo(0.3);
+
+    player.setDuckVolume(0);
+    expect(video.volume).toBe(0);
+  });
+
+  it("does not retarget an in-flight duck fade when setDuckVolume changes mid-fade", () => {
+    const video = fakeVideo(1);
+    const player = new VoiceOverDuckingPlayer({
+      video,
+      duckVolume: 0,
+      duckFadeSteps: 5,
+      duckFadeStepMs: 30,
+    });
+    player.playLine("cue-1", "blob:1"); // fade-in toward 0 starts
+
+    player.setDuckVolume(0.5);
+    expect(video.volume).toBe(1); // unchanged synchronously — fade still animating
+
+    vi.advanceTimersByTime(150); // let the original fade finish
+    expect(video.volume).toBe(0); // the in-flight fade's own target wins, as documented
+  });
+
+  it("does not re-apply setDuckVolume while paused for Extended Audio Description", () => {
+    const video = fakeVideo(1);
+    const player = new VoiceOverDuckingPlayer({
+      video,
+      duckVolume: 0,
+      allowVideoPause: true,
+      duckFadeSteps: 5,
+      duckFadeStepMs: 30,
+    });
+    player.playLine("cue-1", "blob:1");
+    vi.advanceTimersByTime(150);
+    player.pauseForExtendedDescription("cue-1");
+    expect(video.volume).toBe(1); // restored to original for the pause
+
+    player.setDuckVolume(0.4);
+    expect(video.volume).toBe(1); // untouched while paused for Extended Audio Description
   });
 
   it("defaults voiceOverVolume to 1 (full) and duckVolume to 0.15, independently configurable", () => {
@@ -197,6 +342,150 @@ describe("VoiceOverDuckingPlayer", () => {
     const player = new VoiceOverDuckingPlayer({ video, duckVolume: 0 });
     expect(() => player.setPaused(true)).not.toThrow();
     expect(() => player.setPaused(false)).not.toThrow();
+  });
+
+  describe("main volume scaling (mainVolume / ignoreMainVolume)", () => {
+    it("defaults mainVolume to 1 — no behavior change for a host that never calls setMainVolume", () => {
+      const video = fakeVideo(1);
+      const player = new VoiceOverDuckingPlayer({
+        video,
+        duckVolume: 0.2,
+        voiceOverVolume: 0.7,
+        duckFadeSteps: 5,
+        duckFadeStepMs: 30,
+      });
+      player.playLine("cue-1", "blob:1");
+      expect(FakeAudio.instances[0].volume).toBeCloseTo(0.7);
+
+      vi.advanceTimersByTime(150);
+      expect(video.volume).toBeCloseTo(0.2);
+    });
+
+    it("scales both duckVolume and voiceOverVolume multiplicatively by mainVolume", () => {
+      const video = fakeVideo(1);
+      const player = new VoiceOverDuckingPlayer({
+        video,
+        duckVolume: 0.2,
+        voiceOverVolume: 0.8,
+        mainVolume: 0.5,
+        duckFadeSteps: 5,
+        duckFadeStepMs: 30,
+      });
+      player.playLine("cue-1", "blob:1");
+      expect(FakeAudio.instances[0].volume).toBeCloseTo(0.4); // 0.8 * 0.5
+
+      vi.advanceTimersByTime(150);
+      expect(video.volume).toBeCloseTo(0.1); // 0.2 * 0.5
+    });
+
+    it("even at 100% on their own sliders, duckVolume/voiceOverVolume never exceed mainVolume", () => {
+      const video = fakeVideo(1);
+      const player = new VoiceOverDuckingPlayer({
+        video,
+        duckVolume: 1,
+        voiceOverVolume: 1,
+        mainVolume: 0.5,
+        duckFadeSteps: 5,
+        duckFadeStepMs: 30,
+      });
+      player.playLine("cue-1", "blob:1");
+      expect(FakeAudio.instances[0].volume).toBeCloseTo(0.5);
+
+      vi.advanceTimersByTime(150);
+      expect(video.volume).toBeCloseTo(0.5);
+    });
+
+    it("ignoreMainVolume bypasses scaling entirely, even with mainVolume < 1", () => {
+      const video = fakeVideo(1);
+      const player = new VoiceOverDuckingPlayer({
+        video,
+        duckVolume: 0.2,
+        voiceOverVolume: 0.8,
+        mainVolume: 0.5,
+        ignoreMainVolume: true,
+        duckFadeSteps: 5,
+        duckFadeStepMs: 30,
+      });
+      player.playLine("cue-1", "blob:1");
+      expect(FakeAudio.instances[0].volume).toBeCloseTo(0.8);
+
+      vi.advanceTimersByTime(150);
+      expect(video.volume).toBeCloseTo(0.2);
+    });
+
+    it("setMainVolume re-applies live to the current line's narration volume and, once settled, the duck target", () => {
+      const video = fakeVideo(1);
+      const player = new VoiceOverDuckingPlayer({
+        video,
+        duckVolume: 0.2,
+        voiceOverVolume: 0.8,
+        duckFadeSteps: 5,
+        duckFadeStepMs: 30,
+      });
+      player.playLine("cue-1", "blob:1");
+      vi.advanceTimersByTime(150); // duck-in settled
+
+      player.setMainVolume(0.5);
+      expect(FakeAudio.instances[0].volume).toBeCloseTo(0.4);
+      expect(video.volume).toBeCloseTo(0.1);
+    });
+
+    it("setMainVolume does not retarget an in-flight duck fade", () => {
+      const video = fakeVideo(1);
+      const player = new VoiceOverDuckingPlayer({
+        video,
+        duckVolume: 0.2,
+        duckFadeSteps: 5,
+        duckFadeStepMs: 30,
+      });
+      player.playLine("cue-1", "blob:1"); // fade-in toward 0.2 starts
+
+      player.setMainVolume(0.5);
+      expect(video.volume).toBe(1); // unchanged synchronously — fade still animating
+
+      vi.advanceTimersByTime(150); // let the original (unscaled) fade finish
+      expect(video.volume).toBeCloseTo(0.2); // the in-flight fade's own target wins
+    });
+
+    it("setIgnoreMainVolume toggling live re-applies to the current line", () => {
+      const video = fakeVideo(1);
+      const player = new VoiceOverDuckingPlayer({
+        video,
+        duckVolume: 0.2,
+        voiceOverVolume: 0.8,
+        mainVolume: 0.5,
+        duckFadeSteps: 5,
+        duckFadeStepMs: 30,
+      });
+      player.playLine("cue-1", "blob:1");
+      vi.advanceTimersByTime(150);
+      expect(video.volume).toBeCloseTo(0.1);
+
+      player.setIgnoreMainVolume(true);
+      expect(FakeAudio.instances[0].volume).toBeCloseTo(0.8);
+      expect(video.volume).toBeCloseTo(0.2);
+
+      player.setIgnoreMainVolume(false);
+      expect(FakeAudio.instances[0].volume).toBeCloseTo(0.4);
+      expect(video.volume).toBeCloseTo(0.1);
+    });
+
+    it("clamps an out-of-range mainVolume instead of distorting the product", () => {
+      const video = fakeVideo(1);
+      const player = new VoiceOverDuckingPlayer({
+        video,
+        duckVolume: 0.5,
+        voiceOverVolume: 0.5,
+        mainVolume: 2, // out of range
+        duckFadeSteps: 5,
+        duckFadeStepMs: 30,
+      });
+      player.playLine("cue-1", "blob:1");
+      expect(FakeAudio.instances[0].volume).toBeCloseTo(0.5); // clamped to 1, not 1.0*2
+
+      vi.advanceTimersByTime(150);
+      expect(video.volume).toBeCloseTo(0.5);
+    });
   });
 
   describe("fadeCurve", () => {

@@ -128,13 +128,6 @@ with an additional option or a narrower, single-purpose method, consistent
 with this section's running theme of earning new surface area only when a
 concrete need drives it.
 
-The port also fixed two things carried over from the untested app code
-without changing behavior a user would notice as a regression: an
-asymmetric duck fade (fade in, snap out — now symmetric except on a hard
-stop) and an autoplay-rejection that was silently swallowed (now surfaced
-as a `voiceOverPlaybackRejected` event, consistent with this library never
-swallowing errors silently elsewhere).
-
 ## Deliberately rejected
 
 - **mpv.js instead of `<video>` + hls.js** — would break `<video>`'s DOM/CSS

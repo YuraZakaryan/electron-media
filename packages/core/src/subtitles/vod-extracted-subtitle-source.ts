@@ -134,9 +134,9 @@ export class VodExtractedSubtitleSource implements ISubtitleSource {
       this.notifyCuesChanged(trackId);
     }
 
-    this.fetchAndMergeCues(trackId, track.vttUrl);
+    void this.fetchAndMergeCues(trackId, track.vttUrl);
     this.pollTimer = setInterval(() => {
-      this.fetchAndMergeCues(trackId, track.vttUrl);
+      void this.fetchAndMergeCues(trackId, track.vttUrl);
     }, this.pollIntervalMs);
   }
 

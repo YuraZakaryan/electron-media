@@ -1,13 +1,15 @@
 # electron-media
 
-Monorepo for `@electron-media/*` — framework-agnostic HLS playback, multi-audio-track selection, and subtitle (native/VOD-extracted/remote) composition for Electron media apps, built on [hls.js](https://github.com/video-dev/hls.js).
+[![CI](https://github.com/YuraZakaryan/electron-media/actions/workflows/ci.yml/badge.svg)](https://github.com/YuraZakaryan/electron-media/actions/workflows/ci.yml)
+
+Monorepo for `@electron-media/*` — framework-agnostic HLS playback, multi-audio-track selection, subtitle (native/VOD-extracted/remote) composition, and voice-over (TTS narration) for Electron media apps, built on [hls.js](https://github.com/video-dev/hls.js).
 
 ## Packages
 
 | Package | Description |
 | --- | --- |
-| [`@electron-media/core`](packages/core) | Playback engine: `MediaPlayer`, `HlsJsAdapter`, audio-track selection, subtitle sources/rendering. |
-| [`@electron-media/react`](packages/react) | React binding — a single `useMediaPlayer` hook over `@electron-media/core`. |
+| [`@electron-media/core`](packages/core) | Playback engine: `MediaPlayer`, `HlsJsAdapter`/`AttachedHlsAdapter`, audio-track selection, subtitle sources/rendering, `VoiceOverController`. |
+| [`@electron-media/react`](packages/react) | React binding — the all-in-one `useMediaPlayer` hook plus standalone `useAudioTrackController`/`useSubtitleController`/`useVoiceOverController` hooks over `@electron-media/core`. |
 
 Each package's own README has install instructions and usage examples; this file covers the workspace as a whole.
 
@@ -19,6 +21,7 @@ Requires [pnpm](https://pnpm.io) and, for the E2E suite, `ffmpeg` on `PATH`.
 pnpm install
 pnpm build      # tsc -p, both packages
 pnpm test       # vitest unit tests, both packages
+pnpm typecheck  # tsc --noEmit against tsconfig.eslint.json — covers tests/e2e too
 pnpm lint
 ```
 
@@ -29,9 +32,9 @@ pnpm lint
 1. `e2e/generate-stream.mjs` uses `ffmpeg` to synthesize a short multi-audio-track VOD stream with an embedded WebVTT subtitle rendition into `e2e/.generated/` (gitignored, regenerated on every run).
 2. `pnpm -r build` builds both packages so the suite exercises the real published `dist/` artifacts, the way a real consumer would.
 3. `e2e/build-react-harness.mjs` bundles the React test harness with esbuild.
-4. `e2e/server.mjs` serves the fixture stream, built packages, and harness pages; Playwright drives `e2e/tests/core.spec.ts` and `e2e/tests/react.spec.ts` against it.
+4. `e2e/server.mjs` serves the fixture stream, built packages, and harness pages; Playwright drives all five spec files against it: `core.spec.ts`, `attached-adapter.spec.ts`, `react.spec.ts`, `react-standalone-hooks.spec.ts`, and `voice-over.spec.ts`.
 
-Covers real playback, audio-track switching, subtitle rendering/delay/toggling, error/retry behavior (`shouldRetry`, `maxRetries`, transient-failure recovery), reload/destroy lifecycle, and the React hook's mount/unmount/source-change behavior. See `e2e/tests/*.spec.ts` for the full list — a few things are deliberately out of scope (see the comments at the top of each spec file): live streams, non-HLS subtitle sources (already unit-tested), and anything Electron's Chromium-only runtime makes moot (WebKit/Safari fallback paths).
+Covers real playback, audio-track switching, subtitle rendering/delay/toggling, error/retry behavior (`shouldRetry`, `maxRetries`, transient-failure recovery), reload/destroy lifecycle, the React hooks' mount/unmount/source-change behavior (both the all-in-one `useMediaPlayer` and the standalone per-controller hooks bound to a host-constructed controller), and voice-over (ducking, ducking volume, Extended Audio Description, cancellation). See `e2e/tests/*.spec.ts` for the full list — a few things are deliberately out of scope (see the comments at the top of each spec file): live streams, non-HLS subtitle sources (already unit-tested), and anything Electron's Chromium-only runtime makes moot (WebKit/Safari fallback paths).
 
 ## Docs
 

@@ -1,3 +1,6 @@
+import type { VoiceOverTrackId } from "./types/branding.js";
+import type { VoiceOverError } from "./errors/player-error.js";
+
 /**
  * Minimal typed pub/sub used throughout @electron-media/core in
  * place of string-keyed `on(event, cb)` APIs with `unknown` payloads.
@@ -15,10 +18,10 @@ export class TypedEventEmitter<TEvents extends Record<string, unknown>> {
     callback: (payload: TEvents[TEventName]) => void,
   ): () => void {
     const listeners = this.listenersByEvent.get(eventName) ?? new Set();
-    listeners.add(callback as (payload: never) => void);
+    listeners.add(callback);
     this.listenersByEvent.set(eventName, listeners);
     return () => {
-      listeners.delete(callback as (payload: never) => void);
+      listeners.delete(callback);
     };
   }
 
@@ -61,8 +64,8 @@ export interface PlayerReadyEvent {
  * @public
  */
 export interface VoiceOverLineFailedEvent {
-  readonly trackId: import("./types/branding.js").VoiceOverTrackId;
-  readonly error: string | import("./errors/player-error.js").VoiceOverError;
+  readonly trackId: VoiceOverTrackId;
+  readonly error: string | VoiceOverError;
 }
 
 /**
@@ -73,7 +76,7 @@ export interface VoiceOverLineFailedEvent {
  * @public
  */
 export interface VoiceOverPlaybackRejectedEvent {
-  readonly trackId: import("./types/branding.js").VoiceOverTrackId;
+  readonly trackId: VoiceOverTrackId;
 }
 
 /**
@@ -85,7 +88,7 @@ export interface VoiceOverPlaybackRejectedEvent {
  * @public
  */
 export interface VoiceOverVideoResumeRejectedEvent {
-  readonly trackId: import("./types/branding.js").VoiceOverTrackId;
+  readonly trackId: VoiceOverTrackId;
 }
 
 /**
@@ -95,7 +98,7 @@ export interface VoiceOverVideoResumeRejectedEvent {
  * @public
  */
 export interface VoiceOverLinePlayedEvent {
-  readonly trackId: import("./types/branding.js").VoiceOverTrackId;
+  readonly trackId: VoiceOverTrackId;
   readonly cueKey: string;
   readonly clipped?: boolean;
   /** `true` when this line didn't fit its cue's window (WCAG 1.2.7 Extended Audio Description case) — whether the video was actually paused for it depends on the host's `allowVideoPause` setting. */
@@ -110,7 +113,7 @@ export interface VoiceOverLinePlayedEvent {
  * @public
  */
 export interface VoiceOverLineSkippedEvent {
-  readonly trackId: import("./types/branding.js").VoiceOverTrackId;
+  readonly trackId: VoiceOverTrackId;
   readonly cueKey: string;
 }
 

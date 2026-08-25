@@ -20,8 +20,9 @@ implementation details may be more compact.
    `kind: TrackKind` (`Default | Forced | Commentary | Dub | Manual`), not
    `isDefault: boolean`.
 6. **Typed events, never `unknown` payloads** — `PlayerErrorEvent`,
-   `PlayerLoadingEvent`, `PlayerReadyEvent` are concrete interfaces in
-   `PlayerEvents`, subscribed to via `TypedEventEmitter<PlayerEvents>`.
+   `PlayerReadyEvent`, `VoiceOverLineFailedEvent` and the rest of the
+   voice-over event set are concrete interfaces in `PlayerEvents`,
+   subscribed to via `TypedEventEmitter<PlayerEvents>`.
 7. **Typed exceptions, never bare `throw new Error(...)`** — `PlayerError`
    (base), `SubtitleError` `extends PlayerError`, so consumers can
    `catch (e) { if (e instanceof SubtitleError) ... }`. Only add a new

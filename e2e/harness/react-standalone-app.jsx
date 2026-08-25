@@ -139,10 +139,12 @@ function App() {
   const subtitleHook = useSubtitleController(subtitleController);
   const voiceOverHook = useVoiceOverController(voiceOverController);
 
-  window.__voiceOverGenerateLineCallCount = () =>
-    gatewayRef.current?.generateLineCalls.length ?? 0;
-  window.__bindVoiceOverToVodTrack = () =>
-    voiceOverHook.actions.bindSubtitleSource(vodSourceRef.current, VOD_TRACK_ID);
+  useEffect(() => {
+    window.__voiceOverGenerateLineCallCount = () =>
+      gatewayRef.current?.generateLineCalls.length ?? 0;
+    window.__bindVoiceOverToVodTrack = () =>
+      voiceOverHook.actions.bindSubtitleSource(vodSourceRef.current, VOD_TRACK_ID);
+  }, [voiceOverHook.actions]);
 
   return (
     <div>

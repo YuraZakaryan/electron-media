@@ -29,11 +29,17 @@ export interface VoiceOverControllerOptions {
   readonly duckFadeCurve?: FadeCurve;
   /** Opts into WCAG 1.2.7 Extended Audio Description (pausing the video for a line that doesn't fit its cue window). @defaultValue false */
   readonly allowVideoPause?: boolean;
+  /** The host's main/master player volume, `0`–`1`. Live-multiplied into `duckVolume`/`voiceOverVolume` unless {@link ignoreMainVolume} is set. @defaultValue 1 */
+  readonly mainVolume?: number;
+  /** Opts *out* of {@link mainVolume} scaling `duckVolume`/`voiceOverVolume`. @defaultValue false */
+  readonly ignoreMainVolume?: boolean;
   readonly lookaheadSeconds?: number;
   readonly lateStartGraceSeconds?: number;
   readonly maxConcurrentSynthesis?: number;
   /** How far ahead of the *next* cue's own start Extended Audio Description's video-pause fires, for a still-playing line. @defaultValue 0.15 */
   readonly extendedPauseLeadSeconds?: number;
+  /** See {@link VoiceOverCueSchedulerOptions.narrationRate}. @defaultValue 1 */
+  readonly narrationRate?: number;
   /** Persists/restores the user's chosen narration language. Omit to disable auto-restore. */
   readonly preferenceStore?: PlayerPreferenceStore;
   /** Debounce, in ms, applied to rapid {@link bindSubtitleSource} calls. @defaultValue 300 */
@@ -68,6 +74,8 @@ export class VoiceOverController {
   private duckVolume?: number;
   private voiceOverVolume?: number;
   private allowVideoPause?: boolean;
+  private mainVolume?: number;
+  private ignoreMainVolume?: boolean;
   private readonly duckFadeCurve?: FadeCurve;
   private readonly trackSwitchDebounceMs: number;
 
@@ -90,6 +98,7 @@ export class VoiceOverController {
   private readonly unsubscribeFromLineFailed: () => void;
   private readonly unsubscribeFromLineSkipped: () => void;
   private readonly unsubscribeFromPausedChanged: () => void;
+  private readonly unsubscribeFromCueStateChanged: () => void;
   private readonly selectionListeners = new Set<(track: VoiceOverTrack | null) => void>();
   private readonly generatingListeners = new Set<(isGenerating: boolean) => void>();
 
@@ -100,6 +109,8 @@ export class VoiceOverController {
     this.duckVolume = options.duckVolume;
     this.voiceOverVolume = options.voiceOverVolume;
     this.allowVideoPause = options.allowVideoPause;
+    this.mainVolume = options.mainVolume;
+    this.ignoreMainVolume = options.ignoreMainVolume;
     this.duckFadeCurve = options.duckFadeCurve;
     this.trackSwitchDebounceMs =
       options.trackSwitchDebounceMs ?? DEFAULT_TRACK_SWITCH_DEBOUNCE_MS;
@@ -111,6 +122,7 @@ export class VoiceOverController {
       lateStartGraceSeconds: options.lateStartGraceSeconds,
       maxConcurrentSynthesis: options.maxConcurrentSynthesis,
       extendedPauseLeadSeconds: options.extendedPauseLeadSeconds,
+      narrationRate: options.narrationRate,
     });
 
     this.unsubscribeFromLineReady = this.scheduler.onLineReady((line) => {
@@ -157,7 +169,7 @@ export class VoiceOverController {
         this.generatingListeners.forEach((listener) => listener(wasGenerating));
       }
     };
-    this.scheduler.onCueStateChanged(pollGenerating);
+    this.unsubscribeFromCueStateChanged = this.scheduler.onCueStateChanged(pollGenerating);
   }
 
   /** Attaches the video voice-over lines play alongside/duck. Safe to call again with a new element. */
@@ -169,6 +181,8 @@ export class VoiceOverController {
       duckVolume: this.duckVolume,
       voiceOverVolume: this.voiceOverVolume,
       allowVideoPause: this.allowVideoPause,
+      mainVolume: this.mainVolume,
+      ignoreMainVolume: this.ignoreMainVolume,
       fadeCurve: this.duckFadeCurve,
       onPlaybackRejected: (cueKey) => {
         // No audio ever actually started — without releasing the hold
@@ -232,6 +246,11 @@ export class VoiceOverController {
     if (trackId === null) {
       this.setSelected(null);
       this.scheduler.setLanguageCode(null);
+      // Without this, a stale stored language from an earlier explicit pick
+      // would silently turn narration back on the next time getTracks()
+      // resolves (a new controller instance, e.g. after an app restart) —
+      // an explicit "off" must stick exactly as durably as an explicit pick.
+      this.preferenceStore?.setVoiceOverLanguage?.(null);
       return;
     }
 
@@ -241,6 +260,18 @@ export class VoiceOverController {
     this.setSelected(track);
     this.scheduler.setLanguageCode(track.language);
     this.preferenceStore?.setVoiceOverLanguage?.(track.language);
+  }
+
+  /**
+   * Immediately stops any currently playing narration line, restoring the
+   * video's volume — without changing the selected track or persisted
+   * language preference. Unlike calling {@link selectTrack}`(null)`, this
+   * is not an "off" decision: use it for host-side cleanup (e.g. closing
+   * the current title while a line is mid-narration) where the user's
+   * choice should still apply, unchanged, the next time narration starts.
+   */
+  stop(): void {
+    this.scheduler.stop();
   }
 
   /**
@@ -276,6 +307,27 @@ export class VoiceOverController {
   }
 
   /**
+   * Updates the host's main/master player volume, live — multiplied into
+   * both `duckVolume` and `voiceOverVolume` unless {@link setIgnoreMainVolume}
+   * is on. Re-applies immediately to whatever's currently playing, mirroring
+   * {@link setDuckVolume}/{@link setVoiceOverVolume}'s live re-apply.
+   */
+  setMainVolume(volume: number): void {
+    this.mainVolume = volume;
+    this.duckingPlayer?.setMainVolume(volume);
+  }
+
+  /**
+   * Opts in/out of {@link setMainVolume} scaling `duckVolume`/
+   * `voiceOverVolume`, live. Off by default — narration respects the
+   * main volume unless a host explicitly opts out.
+   */
+  setIgnoreMainVolume(ignore: boolean): void {
+    this.ignoreMainVolume = ignore;
+    this.duckingPlayer?.setIgnoreMainVolume(ignore);
+  }
+
+  /**
    * Updates the user-facing timing nudge applied to every bound cue's own
    * `startSeconds`/`endSeconds` before comparing against `video.currentTime`
    * — mirrors `SubtitleController.setDelaySeconds`'s exact contract
@@ -302,6 +354,11 @@ export class VoiceOverController {
   /** Updates the Extended Audio Description pause lead live. Takes effect on the next tick. */
   setExtendedPauseLeadSeconds(seconds: number): void {
     this.scheduler.setExtendedPauseLeadSeconds(seconds);
+  }
+
+  /** Updates the narration rate live — see {@link VoiceOverControllerOptions.narrationRate}. */
+  setNarrationRate(rate: number): void {
+    this.scheduler.setNarrationRate(rate);
   }
 
   /** The currently selected voice-over track, or `null` if disabled. */
@@ -365,6 +422,7 @@ export class VoiceOverController {
     this.unsubscribeFromLineFailed();
     this.unsubscribeFromLineSkipped();
     this.unsubscribeFromPausedChanged();
+    this.unsubscribeFromCueStateChanged();
 
     this.duckingPlayer?.dispose();
     this.duckingPlayer = null;
@@ -375,6 +433,17 @@ export class VoiceOverController {
     source: ISubtitleSource | null,
     trackId: SubtitleTrackId | null
   ): void {
+    // A redundant call with the same source+trackId as already bound is a
+    // no-op, not "just a cheap re-selection" — falling through would still
+    // call scheduler.setCues([]) below, wiping every cue's already-narrated
+    // tracking (Played/Skipped/Ready) and letting an already-played line
+    // look brand new to the next updateCues() delivery, replaying it. This
+    // can be triggered by an unrelated dependency change re-running whatever
+    // effect calls bindSubtitleSource — not just an actual track switch.
+    if (source === this.boundSource && trackId === this.boundSubtitleTrackId) {
+      return;
+    }
+
     this.unsubscribeFromCues?.();
     this.unsubscribeFromCues = null;
     this.boundSource = source;
