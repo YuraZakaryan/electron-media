@@ -42,7 +42,14 @@ jobs:
       # ENEEDAUTH — even with a correctly configured npmjs.com Trusted
       # Publisher and id-token: write above — because the npm binary itself
       # has no OIDC exchange code to run.
-      - run: npm install -g npm@latest
+      #
+      # Pinned to the 11.x line, NOT `npm@latest` — npm 12.0.0 (2026-07-08)
+      # made unknown CLI flags throw instead of warn, and @changesets/cli's
+      # publish step passes a `--git-checks` flag npm 12 no longer
+      # recognizes, turning what used to be a harmless warning into a hard
+      # EUNKNOWNCONFIG failure. 11.x already has OIDC support without that
+      # breaking change.
+      - run: npm install -g npm@11
 
       - run: pnpm install --frozen-lockfile
 
