@@ -31,9 +31,18 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # OIDC trusted publishing needs a recent npm; Node 22 ships one.
           node-version: "22"
           cache: pnpm
+
+      # npm OIDC trusted publishing landed in npm 11.5.0 (2025-07-24) — but
+      # Node 22 bundles npm 10.9.x regardless of patch version (verified
+      # against nodejs/node's deps/npm/package.json across every 22.15-22.20
+      # tag), which predates that feature entirely. Without this, `npm
+      # publish` silently falls back to classic token auth and fails with
+      # ENEEDAUTH — even with a correctly configured npmjs.com Trusted
+      # Publisher and id-token: write above — because the npm binary itself
+      # has no OIDC exchange code to run.
+      - run: npm install -g npm@latest
 
       - run: pnpm install --frozen-lockfile
 
