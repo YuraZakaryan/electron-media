@@ -90,6 +90,7 @@ export class VoiceOverController {
   private boundSource: ISubtitleSource | null = null;
   private boundSubtitleTrackId: SubtitleTrackId | null = null;
   private unsubscribeFromCues: (() => void) | null = null;
+  private deactivateReading: (() => void) | null = null;
   private rebindTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   private readonly unsubscribeFromLineReady: () => void;
@@ -385,18 +386,27 @@ export class VoiceOverController {
 
   /**
    * Subscribes to `trackId`'s cues on `source` and feeds them to the
-   * scheduler as narration material, calling `source.selectTrack(trackId)`
+   * scheduler as narration material, calling `source.activateForReading(trackId)`
    * to activate that source's own fetch/emit pipeline — required for real
    * {@link ISubtitleSource} implementations (`VodExtractedSubtitleSource`,
    * `OpenSubtitlesSource`), which never fetch or emit a track's cue text
-   * until their own `selectTrack()` has been called for that id;
-   * `onCuesChanged` alone only registers a listener nothing else fires.
-   * This is safe to do invisibly: on-screen rendering is owned entirely by
-   * `SubtitleController`'s own selection state and renderer, which never
-   * inspects a source's internal active-track id, so binding a subtitle
-   * track for narration still never has the side effect of visibly turning
-   * that subtitle track on. Debounced against rapid repeated calls (e.g.
-   * arrow-key track cycling).
+   * until activated for that id; `onCuesChanged` alone only registers a
+   * listener, nothing else fires.
+   *
+   * Uses `activateForReading` rather than `selectTrack` specifically because
+   * this source instance may simultaneously be backing the visibly-selected
+   * subtitle on a *different* track (e.g. Arabic subtitles on screen, English
+   * narration read from the same source) — `selectTrack` is a single
+   * exclusive slot shared with `SubtitleController`'s own selection, so
+   * calling it here would silently steal that slot and stop the visible
+   * track's own cue delivery once languages differ. `activateForReading` is
+   * `ISubtitleSource`'s non-exclusive counterpart for exactly this case; a
+   * source without it (declared optional on the interface — currently only
+   * `HlsNativeSubtitleSource`, whose embedded tracks share one demuxer index
+   * and genuinely cannot be independently active) falls back to the old
+   * `selectTrack` behavior, unchanged from before this existed.
+   *
+   * Debounced against rapid repeated calls (e.g. arrow-key track cycling).
    */
   bindSubtitleSource(source: ISubtitleSource | null, trackId: SubtitleTrackId | null): void {
     if (this.rebindTimeoutId !== null) clearTimeout(this.rebindTimeoutId);
@@ -414,6 +424,8 @@ export class VoiceOverController {
     }
     this.unsubscribeFromCues?.();
     this.unsubscribeFromCues = null;
+    this.deactivateReading?.();
+    this.deactivateReading = null;
     this.boundSource = null;
 
     this.unsubscribeFromLineReady();
@@ -446,6 +458,8 @@ export class VoiceOverController {
 
     this.unsubscribeFromCues?.();
     this.unsubscribeFromCues = null;
+    this.deactivateReading?.();
+    this.deactivateReading = null;
     this.boundSource = source;
     this.boundSubtitleTrackId = trackId;
 
@@ -469,16 +483,13 @@ export class VoiceOverController {
     this.unsubscribeFromCues = source.onCuesChanged(trackId, (cues) => {
       this.scheduler.updateCues(cues);
     });
-    // Required for cue text to ever actually arrive — see this method's
-    // doc comment. Deliberately never pairs this with a
-    // `previousSource.selectTrack(null)` on rebind/unbind: this source
-    // instance may also be backing the visibly-selected subtitle on a
-    // different track, and nulling its active id would stop that track's
-    // own fetching/polling as a side effect. Whichever caller (this one or
-    // SubtitleController) calls selectTrack next simply supersedes; a
-    // source's own selectTrack implementation already stops its previous
-    // polling before starting the new one.
-    source.selectTrack(trackId);
+    // Required for cue text to ever actually arrive — see this method's doc
+    // comment for why activateForReading (not selectTrack) is used here.
+    if (source.activateForReading) {
+      this.deactivateReading = source.activateForReading(trackId);
+    } else {
+      source.selectTrack(trackId);
+    }
   }
 
   private autoRestorePreferredTrack(): void {

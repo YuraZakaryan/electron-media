@@ -9,11 +9,22 @@ class MySubtitleSource implements ISubtitleSource {
   readonly sourceId: SubtitleSourceId;
   getTracks(): readonly SubtitleTrack[] { /* ... */ }
   selectTrack(trackId: SubtitleTrackId | null): void { /* ... */ }
+  activateForReading?(trackId: SubtitleTrackId): () => void { /* optional — see below */ }
   onTracksChanged(cb): () => void { /* ... */ }
   onCuesChanged(trackId, cb): () => void { /* ... */ }
   dispose(): void { /* ... */ }
 }
 ```
+
+`selectTrack` is the single exclusive "visibly selected" slot — only one
+track per source may be active this way at a time. `activateForReading` is
+its non-exclusive counterpart: implement it if your source can independently
+serve more than one track's cues concurrently (most fetch/poll-based sources
+can), so `VoiceOverController` can narrate a *different* track than whatever
+is visibly selected on the same source without disturbing it (see
+`VoiceOverController` in `lifecycle.md`). Omit it only when your source
+genuinely cannot — see `HlsNativeSubtitleSource` below — `VoiceOverController`
+falls back to `selectTrack` in that case, same as before this method existed.
 
 Register it via `MediaPlayerOptions.subtitleSources`, or later at runtime via
 the `SubtitleRegistry` (construct your own `SubtitleController` wiring rather
@@ -31,8 +42,16 @@ Existing sources to use as reference:
   is visibly showing, shared with whatever else (e.g. `SubtitleController`)
   also calls it on the same adapter instance. Activating a different
   rendition here — for narration only — visibly changes what's on screen.
-- `VodExtractedSubtitleSource` — polls a growing `.vtt` file.
-- `OpenSubtitlesSource` — one-shot search + download via `ISubtitleGateway`.
+  This is why it does **not** implement `activateForReading`: there is no
+  way to independently serve a second rendition's cues without also
+  demuxing/showing it.
+- `VodExtractedSubtitleSource` — polls a growing `.vtt` file per track;
+  `activateForReading` polls independently of `selectTrack` (own timer per
+  trackId), so a narrated track and the visibly-selected one never fight
+  over the same poll slot even when they differ.
+- `OpenSubtitlesSource` — one-shot search + download via `ISubtitleGateway`,
+  cached per track; `activateForReading` and `selectTrack` both just trigger
+  that same per-track cache, so no independent state was needed here.
 
 ## Add a new subtitle renderer (e.g. ASS/SSA)
 
@@ -76,6 +95,11 @@ or another abortable primitive may honor it; one that ignores it behaves
 exactly as if it were never passed.
 
 ### Recipe: deciding which subtitle track to narrate
+
+The `hls-native` special-casing below is the *only* case a host needs to
+guard against — every other source implements `activateForReading`, so
+narrating any of their tracks independently of what's visibly selected is
+safe by construction; no per-source reasoning needed beyond this one check.
 
 `VoiceOverController.bindSubtitleSource` takes an explicit
 `(source, trackId)` pair — it deliberately has no auto-pick policy of its

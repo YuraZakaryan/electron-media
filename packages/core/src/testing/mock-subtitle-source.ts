@@ -6,6 +6,8 @@ import type { ISubtitleSource } from "../subtitles/subtitle-source.js";
 /** Test double for {@link ISubtitleSource}. Not exported from the package's public API. */
 export class MockSubtitleSource implements ISubtitleSource {
   selectedTrackId: SubtitleTrackId | null = null;
+  /** Test-only record of currently-active activateForReading() trackIds — mirrors selectedTrackId but non-exclusive, matching the real contract. */
+  readonly activatedForReadingTrackIds = new Set<SubtitleTrackId>();
   disposed = false;
 
   private tracks: SubtitleTrack[];
@@ -31,6 +33,11 @@ export class MockSubtitleSource implements ISubtitleSource {
 
   selectTrack(trackId: SubtitleTrackId | null): void {
     this.selectedTrackId = trackId;
+  }
+
+  activateForReading(trackId: SubtitleTrackId): () => void {
+    this.activatedForReadingTrackIds.add(trackId);
+    return () => this.activatedForReadingTrackIds.delete(trackId);
   }
 
   onTracksChanged(

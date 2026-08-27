@@ -32,11 +32,21 @@ TextTrack (holding a full transcript) for the lifetime of the video element.
 Calling `selectTrack(null)` or selecting a different track stops the
 previous poll. `dispose()` stops any active poll unconditionally.
 
+`activateForReading(trackId)` (see below) polls independently of
+`selectTrack` — its own `Map<trackId, timer>`, keyed separately from
+`selectTrack`'s single `pollTimer`. Switching the `selectTrack`-selected
+track never stops an `activateForReading` poll, and vice versa; each is
+stopped only by its own deactivate call (the function `activateForReading`
+returns) or by `dispose()`, which clears both.
+
 ## `OpenSubtitlesSource` downloads
 
 Unlike the VOD-extracted source, a selected track's full transcript is
 downloaded once (no polling) and cached — reselecting the same track after
-switching away reuses the cached cues rather than re-downloading.
+switching away reuses the cached cues rather than re-downloading. Because of
+this, `activateForReading` and `selectTrack` don't need independent state
+here the way they do on `VodExtractedSubtitleSource` — both just trigger the
+same per-track cached download.
 
 ## `VoiceOverController`
 
@@ -44,8 +54,17 @@ switching away reuses the cached cues rather than re-downloading.
   contract as `SubtitleController`; a remounted `<video>` requires a fresh
   `attach` call, not a persisted reference.
 - `bindSubtitleSource(source, trackId)` subscribes to `source.onCuesChanged`
-  only — it never calls `source.selectTrack()`. Narrating a subtitle track
-  must never have the side effect of visibly turning that track on.
+  and calls `source.activateForReading(trackId)` (falling back to
+  `source.selectTrack(trackId)` for a source that doesn't implement it, e.g.
+  `HlsNativeSubtitleSource` — see `extension-points.md`) — required for real
+  `ISubtitleSource` implementations, which never fetch/emit a track's cue
+  text until activated for that id. `activateForReading` is non-exclusive,
+  specifically so narrating a subtitle track never has the side effect of
+  disturbing whatever's visibly selected on the same source, even when it's
+  a *different* track (e.g. Arabic subtitles on screen, English narration
+  read from the same VOD-extracted source) — `selectTrack` alone would
+  silently steal the source's one exclusive active-track slot and stop the
+  visible track's own cue delivery once the two diverge.
 - Ticks once per frame reading `video.currentTime`/`video.paused`/
   `video.readyState` fresh each time, rather than via `pause`/`play`/
   `seeking`/`waiting` listeners — a listener bound in `attach` would

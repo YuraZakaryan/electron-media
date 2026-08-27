@@ -118,6 +118,22 @@ export class OpenSubtitlesSource implements ISubtitleSource {
     void this.downloadAndEmitCues(trackId, fileId);
   }
 
+  /**
+   * See {@link ISubtitleSource.activateForReading}. Doesn't touch
+   * `activeTrackId` — unlike VodExtractedSubtitleSource this source has no
+   * polling to stop/start per track (fetch-once, cached by trackId), so this
+   * is really just `selectTrack` without the exclusive-slot side effect;
+   * kept as a separate method for interface symmetry and because the two
+   * having independent behavior is exactly what the shared subtitle-source
+   * contract calls for. Nothing to deactivate on unsubscribe, since a
+   * downloaded transcript simply stays cached for the track's lifetime.
+   */
+  activateForReading(trackId: SubtitleTrackId): () => void {
+    const fileId = this.fileIdByTrackId.get(trackId);
+    if (fileId !== undefined) void this.downloadAndEmitCues(trackId, fileId);
+    return () => {};
+  }
+
   onTracksChanged(
     callback: (tracks: readonly SubtitleTrack[]) => void
   ): () => void {

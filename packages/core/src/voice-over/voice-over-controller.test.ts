@@ -131,7 +131,7 @@ describe("VoiceOverController", () => {
     expect(changed).toHaveBeenCalledTimes(1);
   });
 
-  it("bindSubtitleSource calls source.selectTrack(trackId) to activate cue fetching", async () => {
+  it("bindSubtitleSource calls source.activateForReading(trackId) to activate cue fetching", async () => {
     vi.useFakeTimers();
     const source = new MockSubtitleSource(asSubtitleSourceId("subs"), [
       { trackId: asSubtitleTrackId(1), displayName: "EN", kind: TrackKind.Default, sourceId: asSubtitleSourceId("subs") },
@@ -139,11 +139,36 @@ describe("VoiceOverController", () => {
     controller.bindSubtitleSource(source, asSubtitleTrackId(1));
     vi.advanceTimersByTime(20);
     // Real ISubtitleSource implementations (VodExtractedSubtitleSource,
-    // OpenSubtitlesSource) never fetch/emit a track's cue text until their
-    // own selectTrack() has been called for that id — onCuesChanged alone
-    // is just a listener nothing else fires. Without this call, voice-over
-    // would silently never receive any narration text at all.
+    // OpenSubtitlesSource) never fetch/emit a track's cue text until
+    // activated for that id — onCuesChanged alone is just a listener,
+    // nothing else fires. Without this call, voice-over would silently
+    // never receive any narration text at all.
+    expect(source.activatedForReadingTrackIds.has(asSubtitleTrackId(1))).toBe(true);
+    // activateForReading, unlike selectTrack, must never touch the source's
+    // single exclusive selection slot — that's the whole point of using it.
+    expect(source.selectedTrackId).toBeNull();
+  });
+
+  it("activating a narration track never disturbs a different track already selected for display on the same source", async () => {
+    // Regression test for the reported bug: e.g. Arabic subtitles visibly
+    // selected (source.selectTrack) while English narration reads a
+    // different track (source.activateForReading) from the SAME source
+    // instance — before activateForReading existed, both paths called the
+    // same exclusive selectTrack(), so binding narration silently stole the
+    // source's one active-track slot and the visible track's own cue
+    // delivery (e.g. VodExtractedSubtitleSource's polling) stopped.
+    vi.useFakeTimers();
+    const source = new MockSubtitleSource(asSubtitleSourceId("subs"), [
+      { trackId: asSubtitleTrackId(1), displayName: "AR", kind: TrackKind.Default, sourceId: asSubtitleSourceId("subs") },
+      { trackId: asSubtitleTrackId(2), displayName: "EN", kind: TrackKind.Default, sourceId: asSubtitleSourceId("subs") },
+    ]);
+    source.selectTrack(asSubtitleTrackId(1)); // visibly-selected subtitle track
+
+    controller.bindSubtitleSource(source, asSubtitleTrackId(2)); // narration track
+    vi.advanceTimersByTime(20);
+
     expect(source.selectedTrackId).toBe(asSubtitleTrackId(1));
+    expect(source.activatedForReadingTrackIds.has(asSubtitleTrackId(2))).toBe(true);
   });
 
   it("subscribes before selecting, so a cache-hit source's synchronous cue emission is still captured", async () => {
@@ -174,7 +199,7 @@ describe("VoiceOverController", () => {
     ]);
     controller.bindSubtitleSource(firstSource, asSubtitleTrackId(1));
     vi.advanceTimersByTime(20);
-    expect(firstSource.selectedTrackId).toBe(asSubtitleTrackId(1));
+    expect(firstSource.activatedForReadingTrackIds.has(asSubtitleTrackId(1))).toBe(true);
 
     const secondSource = new MockSubtitleSource(asSubtitleSourceId("subs-2"), [
       { trackId: asSubtitleTrackId(2), displayName: "RU", kind: TrackKind.Default, sourceId: asSubtitleSourceId("subs-2") },
@@ -182,13 +207,14 @@ describe("VoiceOverController", () => {
     controller.bindSubtitleSource(secondSource, asSubtitleTrackId(2));
     vi.advanceTimersByTime(20);
 
-    // Rebinding to a different source must never null out the FIRST
-    // source's own selection — that source may still be backing the
-    // visibly-rendered subtitle on its track, and this controller has no
-    // way to know that, so it must never touch a source it isn't currently
-    // bound to.
-    expect(firstSource.selectedTrackId).toBe(asSubtitleTrackId(1));
-    expect(secondSource.selectedTrackId).toBe(asSubtitleTrackId(2));
+    // Rebinding to a different source must never leave the FIRST source's
+    // own reading activation dangling — that source may still be backing
+    // the visibly-rendered subtitle on its track, and this controller has
+    // no way to know that, so it must deactivate its OWN prior activation
+    // (via the returned deactivate callback) without ever touching a
+    // source it isn't currently bound to otherwise.
+    expect(firstSource.activatedForReadingTrackIds.has(asSubtitleTrackId(1))).toBe(false);
+    expect(secondSource.activatedForReadingTrackIds.has(asSubtitleTrackId(2))).toBe(true);
   });
 
   it("forwards bound subtitle cues into the scheduler", async () => {

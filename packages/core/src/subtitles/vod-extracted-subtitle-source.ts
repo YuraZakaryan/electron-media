@@ -65,6 +65,17 @@ export class VodExtractedSubtitleSource implements ISubtitleSource {
 
   private activeTrackId: SubtitleTrackId | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  // Separate from activeTrackId/pollTimer above: those back selectTrack's
+  // single exclusive "active" slot (on-screen display selection), while this
+  // backs activateForReading's independent, non-exclusive activations (e.g.
+  // voice-over narration reading a different-language track's text
+  // concurrently with whatever's visibly selected). Keying poll timers per
+  // track here means selectTrack switching the display track never stops a
+  // reading activation's polling, and vice versa.
+  private readonly readPollTimersByTrackId = new Map<
+    SubtitleTrackId,
+    ReturnType<typeof setInterval>
+  >();
   private readonly seenCueKeysByTrackId = new Map<
     SubtitleTrackId,
     Set<string>
@@ -140,6 +151,29 @@ export class VodExtractedSubtitleSource implements ISubtitleSource {
     }, this.pollIntervalMs);
   }
 
+  /** See {@link ISubtitleSource.activateForReading}. */
+  activateForReading(trackId: SubtitleTrackId): () => void {
+    const track = this.tracksById.get(trackId);
+    if (!track) return () => {};
+
+    // Same synchronous re-emit-if-cached rationale as selectTrack.
+    if ((this.canonicalCuesByTrackId.get(trackId)?.length ?? 0) > 0) {
+      this.notifyCuesChanged(trackId);
+    }
+
+    if (!this.readPollTimersByTrackId.has(trackId)) {
+      void this.fetchAndMergeCues(trackId, track.vttUrl);
+      this.readPollTimersByTrackId.set(
+        trackId,
+        setInterval(() => {
+          void this.fetchAndMergeCues(trackId, track.vttUrl);
+        }, this.pollIntervalMs)
+      );
+    }
+
+    return () => this.stopReadPolling(trackId);
+  }
+
   onTracksChanged(): () => void {
     // This source's track list is fixed at construction time; nothing to subscribe to.
     return () => {};
@@ -157,6 +191,9 @@ export class VodExtractedSubtitleSource implements ISubtitleSource {
 
   dispose(): void {
     this.stopPolling();
+    for (const trackId of this.readPollTimersByTrackId.keys()) {
+      this.stopReadPolling(trackId);
+    }
     this.cueListeners.clear();
   }
 
@@ -164,6 +201,13 @@ export class VodExtractedSubtitleSource implements ISubtitleSource {
     if (this.pollTimer === null) return;
     clearInterval(this.pollTimer);
     this.pollTimer = null;
+  }
+
+  private stopReadPolling(trackId: SubtitleTrackId): void {
+    const timer = this.readPollTimersByTrackId.get(trackId);
+    if (timer === undefined) return;
+    clearInterval(timer);
+    this.readPollTimersByTrackId.delete(trackId);
   }
 
   private async fetchAndMergeCues(
@@ -183,8 +227,11 @@ export class VodExtractedSubtitleSource implements ISubtitleSource {
     if (!response || !response.ok) {
       // A 404 means this session's directory is gone (e.g. a seek replaced
       // it) — stop polling a dead URL rather than hammering it every tick.
-      if (response?.status === 404 && this.activeTrackId === trackId) {
-        this.stopPolling();
+      // Both polling mechanisms fetch the same vttUrl for this trackId, so a
+      // 404 dooms whichever one(s) are currently running for it.
+      if (response?.status === 404) {
+        if (this.activeTrackId === trackId) this.stopPolling();
+        this.stopReadPolling(trackId);
       }
       return;
     }

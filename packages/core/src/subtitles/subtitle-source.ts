@@ -45,6 +45,22 @@ export interface ISubtitleSource {
    */
   selectTrack(trackId: SubtitleTrackId | null): void;
 
+  /**
+   * Non-exclusively activates cue delivery for `trackId` — for a consumer
+   * (e.g. voice-over narration reading a track's text) that needs a track's
+   * cues without taking over {@link selectTrack}'s single exclusive "active"
+   * slot, which is reserved for on-screen display selection. Unlike
+   * `selectTrack`, any number of different trackIds may be activated this
+   * way concurrently, independent of whatever `selectTrack` currently has
+   * selected. Returns a function that deactivates only this activation.
+   *
+   * Optional: a source for which two tracks genuinely cannot be independently
+   * active (e.g. an embedded HLS rendition, where the underlying demuxer only
+   * ever decodes one subtitle track index) may omit this — callers fall back
+   * to `selectTrack`, same as before this method existed.
+   */
+  activateForReading?(trackId: SubtitleTrackId): () => void;
+
   /** Notifies `callback` whenever this source's track list changes. Returns an unsubscribe function. */
   onTracksChanged(
     callback: (tracks: readonly SubtitleTrack[]) => void

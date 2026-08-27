@@ -225,6 +225,48 @@ describe("VodExtractedSubtitleSource", () => {
     expect(fetchImpl.mock.calls.length).toBe(callsBeforeDeselect);
   });
 
+  it("activateForReading a different track keeps polling the selectTrack-selected one — the reported bug (e.g. Arabic subtitles + English narration) was this stopping", async () => {
+    vi.useFakeTimers();
+    const TRACK_B = asSubtitleTrackId(2);
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        fakeResponse({ text: vttWithCues(["00:01.000", "00:02.000", "Hello"]) })
+      );
+    const source = new VodExtractedSubtitleSource({
+      sourceId: SOURCE_ID,
+      tracks: [
+        { trackId: TRACK_ID, displayName: "Arabic", kind: TrackKind.Default, vttUrl: "/vod/ar.vtt" },
+        { trackId: TRACK_B, displayName: "English", kind: TrackKind.Default, vttUrl: "/vod/en.vtt" },
+      ],
+      fetchImpl,
+      pollIntervalMs: 1000,
+    });
+
+    source.selectTrack(TRACK_ID); // visible subtitle track
+    await vi.advanceTimersByTimeAsync(0);
+    const arCallsAfterSelect = fetchImpl.mock.calls.filter(
+      (call) => call[0] === "/vod/ar.vtt"
+    ).length;
+    expect(arCallsAfterSelect).toBeGreaterThan(0);
+
+    source.activateForReading(TRACK_B); // narration track, same source
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The bug: activateForReading used to just be selectTrack, which calls
+    // stopPolling() unconditionally — so this second call would have killed
+    // the Arabic track's poll timer entirely, permanently, even though it's
+    // still visibly selected. Already-fetched cues stayed on screen, so this
+    // only became visible once the transcode produced new lines beyond what
+    // was already cached — "subtitles stop after a while".
+    fetchImpl.mockClear();
+    await vi.advanceTimersByTimeAsync(3000);
+    const arCallsAfterNarrationBind = fetchImpl.mock.calls.filter(
+      (call) => call[0] === "/vod/ar.vtt"
+    ).length;
+    expect(arCallsAfterNarrationBind).toBeGreaterThan(0);
+  });
+
   it("re-emits already-cached cues synchronously when the same track is re-selected", async () => {
     // The regression this guards: fetchAndMergeCues only notifies when it
     // finds cues it has not seen before, so re-selecting a track whose .vtt
