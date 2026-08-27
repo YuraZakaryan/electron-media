@@ -43,10 +43,26 @@ returns) or by `dispose()`, which clears both.
 
 Unlike the VOD-extracted source, a selected track's full transcript is
 downloaded once (no polling) and cached — reselecting the same track after
-switching away reuses the cached cues rather than re-downloading. Because of
-this, `activateForReading` and `selectTrack` don't need independent state
-here the way they do on `VodExtractedSubtitleSource` — both just trigger the
-same per-track cached download.
+switching away reuses the cached cues rather than re-downloading. Both
+`activateForReading` and `selectTrack` trigger the same per-track cached
+download — but they DO need independent state for one thing:
+`activatedForReadingTrackIds` (a `Set<trackId>`), checked alongside
+`activeTrackId` by the in-flight download's staleness guard.
+
+That guard exists to drop a `selectTrack()` download that a *later*
+`selectTrack()` call superseded before the first one resolved. Bug fixed
+here: the guard originally checked only `activeTrackId` (set exclusively by
+`selectTrack`), so a download triggered by `activateForReading` for a track
+that wasn't *also* the `selectTrack`-selected one was treated as stale and
+silently discarded — every time, since `activateForReading` never touches
+`activeTrackId`. In practice this meant narration only worked when the
+voice-over language happened to match the visibly-selected open-subtitle
+language (e.g. Italian subtitle + Portuguese narration never spoke; Italian
+subtitle + Italian narration worked by coincidence). `activateForReading`
+now records its own trackId in `activatedForReadingTrackIds` so its
+downloads are exempt from that guard, matching its non-exclusive contract —
+see its own doc comment and `opensubtitles-source.test.ts`'s two regression
+tests.
 
 ## `VoiceOverController`
 

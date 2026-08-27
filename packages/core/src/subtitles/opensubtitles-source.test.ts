@@ -197,6 +197,75 @@ describe("OpenSubtitlesSource", () => {
     expect(staleListener).not.toHaveBeenCalled();
   });
 
+  it("activateForReading a track that isn't the selectTrack-selected one still emits its cues — the reported bug (e.g. Italian subtitle + Portuguese narration only worked when both matched) was this download being dropped", async () => {
+    const gateway = new MockSubtitleGateway();
+    gateway.searchResult = {
+      success: true,
+      results: [
+        { fileId: 1, language: "it", rating: 2 },
+        { fileId: 2, language: "pt", rating: 1 },
+      ],
+    };
+    const source = new OpenSubtitlesSource({ sourceId: SOURCE_ID, gateway });
+    const [visibleTrack, narrationTrack] = await source.search({ tmdbId: 1 });
+    gateway.downloadResultByFileId.set(1, {
+      success: true,
+      content: "1\n00:00:01,000 --> 00:00:02,000\nCiao",
+    });
+    gateway.downloadResultByFileId.set(2, {
+      success: true,
+      content: "1\n00:00:01,000 --> 00:00:02,000\nOlá",
+    });
+    const narrationListener = vi.fn();
+    source.onCuesChanged(narrationTrack.trackId, narrationListener);
+
+    // The visible subtitle (Italian) is selected the normal, exclusive way...
+    source.selectTrack(visibleTrack.trackId);
+    // ...while narration (Portuguese) is independently activated for reading,
+    // exactly as VoiceOverController does when the two languages differ.
+    source.activateForReading(narrationTrack.trackId);
+    await flushMicrotasks();
+
+    expect(narrationListener).toHaveBeenCalledWith([
+      { startSeconds: 1, endSeconds: 2, text: "Olá" },
+    ]);
+  });
+
+  it("still drops a selectTrack() download superseded by a later selectTrack() even when an unrelated track is activated for reading", async () => {
+    const gateway = new MockSubtitleGateway();
+    gateway.searchResult = {
+      success: true,
+      results: [
+        { fileId: 1, rating: 2 },
+        { fileId: 2, rating: 1 },
+        { fileId: 3, rating: 1 },
+      ],
+    };
+    const source = new OpenSubtitlesSource({ sourceId: SOURCE_ID, gateway });
+    const [trackA, trackB, trackC] = await source.search({ tmdbId: 1 });
+    gateway.downloadResultByFileId.set(1, {
+      success: true,
+      content: "1\n00:00:01,000 --> 00:00:02,000\nStale",
+    });
+    gateway.downloadResultByFileId.set(2, {
+      success: true,
+      content: "1\n00:00:05,000 --> 00:00:06,000\nCurrent",
+    });
+    gateway.downloadResultByFileId.set(3, {
+      success: true,
+      content: "1\n00:00:09,000 --> 00:00:10,000\nUnrelated",
+    });
+    const staleListener = vi.fn();
+    source.onCuesChanged(trackA.trackId, staleListener);
+
+    source.activateForReading(trackC.trackId);
+    source.selectTrack(trackA.trackId);
+    source.selectTrack(trackB.trackId);
+    await flushMicrotasks();
+
+    expect(staleListener).not.toHaveBeenCalled();
+  });
+
   it("dispose() clears track and cue subscriptions", async () => {
     const gateway = new MockSubtitleGateway();
     gateway.searchResult = {

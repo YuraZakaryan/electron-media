@@ -50,8 +50,15 @@ Existing sources to use as reference:
   trackId), so a narrated track and the visibly-selected one never fight
   over the same poll slot even when they differ.
 - `OpenSubtitlesSource` — one-shot search + download via `ISubtitleGateway`,
-  cached per track; `activateForReading` and `selectTrack` both just trigger
-  that same per-track cache, so no independent state was needed here.
+  cached per track; `activateForReading` and `selectTrack` both trigger that
+  same per-track cached download, but each is tracked in its own state
+  (`activatedForReadingTrackIds` vs. `activeTrackId`) — a download's
+  staleness guard (dropping a `selectTrack()` fetch a later `selectTrack()`
+  superseded) must not also drop a still-wanted `activateForReading()` fetch
+  for a *different* track just because it isn't the visibly-selected one.
+  Missing this was a real bug: narration only worked when the voice-over
+  language happened to match the visible open-subtitle language. See
+  `docs/lifecycle.md`'s "OpenSubtitlesSource downloads" section.
 
 ## Add a new subtitle renderer (e.g. ASS/SSA)
 
