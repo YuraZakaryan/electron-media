@@ -49,6 +49,7 @@ export class OpenSubtitlesSource implements ISubtitleSource {
   private fileIdByTrackId = new Map<SubtitleTrackId, number>();
   private canonicalCuesByTrackId = new Map<SubtitleTrackId, CanonicalCue[]>();
   private activeTrackId: SubtitleTrackId | null = null;
+  private activatedForReadingTrackIds = new Set<SubtitleTrackId>();
 
   private readonly trackListeners = new Set<
     (tracks: readonly SubtitleTrack[]) => void
@@ -125,13 +126,21 @@ export class OpenSubtitlesSource implements ISubtitleSource {
    * is really just `selectTrack` without the exclusive-slot side effect;
    * kept as a separate method for interface symmetry and because the two
    * having independent behavior is exactly what the shared subtitle-source
-   * contract calls for. Nothing to deactivate on unsubscribe, since a
-   * downloaded transcript simply stays cached for the track's lifetime.
+   * contract calls for.
+   *
+   * Tracked in `activatedForReadingTrackIds` so `downloadAndEmitCues`'s
+   * stale-download guard (written for `selectTrack`'s single exclusive slot)
+   * doesn't discard this fetch just because some *other* track is the
+   * visibly-selected one — the bug this fixed: a narration language that
+   * differed from the on-screen subtitle's language downloaded its transcript
+   * successfully but the result was silently dropped every time, since
+   * `activeTrackId` was never this track's id.
    */
   activateForReading(trackId: SubtitleTrackId): () => void {
+    this.activatedForReadingTrackIds.add(trackId);
     const fileId = this.fileIdByTrackId.get(trackId);
     if (fileId !== undefined) void this.downloadAndEmitCues(trackId, fileId);
-    return () => {};
+    return () => this.activatedForReadingTrackIds.delete(trackId);
   }
 
   onTracksChanged(
@@ -154,6 +163,7 @@ export class OpenSubtitlesSource implements ISubtitleSource {
   dispose(): void {
     this.trackListeners.clear();
     this.cueListeners.clear();
+    this.activatedForReadingTrackIds.clear();
   }
 
   private async downloadAndEmitCues(
@@ -169,8 +179,16 @@ export class OpenSubtitlesSource implements ISubtitleSource {
     const result = await this.gateway.download(fileId);
     // A later selectTrack() call may have superseded this one while the
     // download was in flight — don't resurrect a track the caller already
-    // moved away from.
-    if (this.activeTrackId !== trackId) return;
+    // moved away from. Doesn't apply to a track activateForReading()
+    // independently activated: that's a non-exclusive slot by design (see
+    // its own doc comment), so it's never "superseded" by a different
+    // track becoming the visible selection.
+    if (
+      this.activeTrackId !== trackId &&
+      !this.activatedForReadingTrackIds.has(trackId)
+    ) {
+      return;
+    }
     if (!result.success || !result.content) {
       // selectTrack() is synchronous and fire-and-forget (ISubtitleSource has
       // no error channel of its own) — throwing here would only surface as
