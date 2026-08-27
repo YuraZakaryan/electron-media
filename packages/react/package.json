@@ -1,6 +1,6 @@
 {
   "name": "@electron-media/react",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "React binding for @electron-media/core — useMediaPlayer and standalone per-controller hooks exposing audio/subtitle track selection, voice-over, and playback state.",
   "type": "module",
   "license": "MIT",
