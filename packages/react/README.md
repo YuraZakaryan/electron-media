@@ -1,5 +1,8 @@
 # @electron-media/react
 
+> **⚠️ Deprecated — renamed to [`@medialoom/react`](https://www.npmjs.com/package/@medialoom/react).**
+> See [github.com/YuraZakaryan/medialoom](https://github.com/YuraZakaryan/medialoom).
+
 React binding for [`@electron-media/core`](https://www.npmjs.com/package/@electron-media/core) — `useMediaPlayer`, one hook exposing multi-audio track selection, subtitle (native/VOD-extracted/OpenSubtitles) track selection, voice-over (TTS narration) and playback state. Internal core classes (`MediaPlayer`, `SubtitleController`, `AudioTrackController`, `VoiceOverController`, etc.) are never exposed through the hook — only plain data and callbacks. Three standalone hooks (`useAudioTrackController`, `useSubtitleController`, `useVoiceOverController`) are also exported, for hosts that build the underlying classes themselves — see [When you own the `Hls` lifecycle yourself](#when-you-own-the-hls-lifecycle-yourself).
 
 ## Install
