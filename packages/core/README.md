@@ -1,5 +1,8 @@
 # @electron-media/core
 
+> **⚠️ Deprecated — renamed to [`@medialoom/core`](https://www.npmjs.com/package/@medialoom/core).**
+> See [github.com/YuraZakaryan/medialoom](https://github.com/YuraZakaryan/medialoom).
+
 Framework-agnostic multi-audio-track selection, native/VOD-extracted/remote subtitle composition, and voice-over (TTS narration) for HLS playback in Electron media apps, built on [hls.js](https://github.com/video-dev/hls.js).
 
 Not a full player — it composes track selection and subtitle rendering behind a small facade (`MediaPlayer`) and a set of narrow, independently testable classes. HLS lifecycle, transcoding, and DRM stay outside its scope; bring your own via the adapter/gateway interfaces below.

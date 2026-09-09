@@ -1,5 +1,13 @@
 # electron-media
 
+> **⚠️ Archived — moved to [medialoom](https://github.com/YuraZakaryan/medialoom).**
+> This library was never actually Electron-specific — it's a framework-agnostic
+> HLS playback core. It has been renamed and continues development as
+> [`@medialoom/core`](https://www.npmjs.com/package/@medialoom/core) and
+> [`@medialoom/react`](https://www.npmjs.com/package/@medialoom/react).
+> `@electron-media/core`/`@electron-media/react` are deprecated on npm and
+> will not receive further updates — please migrate.
+
 [![CI](https://github.com/YuraZakaryan/electron-media/actions/workflows/ci.yml/badge.svg)](https://github.com/YuraZakaryan/electron-media/actions/workflows/ci.yml)
 
 Monorepo for `@electron-media/*` — framework-agnostic HLS playback, multi-audio-track selection, subtitle (native/VOD-extracted/remote) composition, and voice-over (TTS narration) for Electron media apps, built on [hls.js](https://github.com/video-dev/hls.js).
